@@ -5,7 +5,7 @@ import pytz
 import datetime as dt
 
 
-def celerybeat_cleanup():
+def celerybeat_cleanup() -> None:
     """ Celery beat cleanup before app start """
     with contextlib.suppress(FileNotFoundError):
         os.remove("celerybeat-schedule.bak")
@@ -13,7 +13,7 @@ def celerybeat_cleanup():
         os.remove("celerybeat-schedule.dir")
 
 
-def setup_logger(name, log_file, level=logging.INFO):
+def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging.Logger:
     """ Setup logger """
     log_file_folder = os.path.dirname(log_file)
     if not os.path.exists(log_file_folder):
