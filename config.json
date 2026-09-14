@@ -1,0 +1,24 @@
+{
+  "celery_app": {
+    "name": "geo_download_app",
+    "username": "mq_admin",
+    "password": "mq_admin",
+    "host": "localhost",
+    "port": 5672,
+    "tasks": [
+      {
+        "source_name": "USGS_Earthquake",
+        "month": "*",
+        "day": "*",
+        "hour": 2,
+        "minute": 0,
+        "timezone": "Europe/Warsaw",
+        "name": "download_USGS_Earthquake"
+      }
+    ]
+  },
+  "job": {
+    "folder_name": "GEO_Download",
+    "python_script": "run_download.py"
+  }
+}

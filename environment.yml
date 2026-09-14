@@ -1,0 +1,10 @@
+name: geo_e2e_311
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - requests>=2.31.0
+  - pydantic>=2.0.0
+  - celery>=5.3.0
+  - pytz>=2023.3
+  - pytest>=7.0.0
