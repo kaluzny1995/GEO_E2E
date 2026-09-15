@@ -75,11 +75,10 @@ GEO_E2E/
 
 ## Setup
 
-### 1. Create and activate the Conda environment
+### 1. Create the Conda environment
 
 ```bash
 conda env create -f environment.yml
-conda activate geo_e2e_311
 ```
 
 ### 2. Start RabbitMQ
@@ -179,17 +178,19 @@ Both processes must run simultaneously in **separate terminals**. The worker exe
 **Terminal 1 — Worker** (executes downloads):
 
 ```bash
-conda activate geo_e2e_311
-cd ~/AI\ Solutions/GeographicData/GEO_E2E
-celery -A app.geo_app worker --loglevel=info
+conda run -n geo_e2e_311 celery -A app.geo_app worker --loglevel=info
 ```
 
 **Terminal 2 — Beat** (sends tasks on schedule):
 
 ```bash
-conda activate geo_e2e_311
-cd ~/AI\ Solutions/GeographicData/GEO_E2E
-celery -A app.geo_app beat --loglevel=debug
+conda run -n geo_e2e_311 celery -A app.geo_app beat --loglevel=debug
+```
+
+Or run both in one command (worker in background, beat in foreground):
+
+```bash
+conda run -n geo_e2e_311 bash -c "celery -A app.geo_app worker --loglevel=info & celery -A app.geo_app beat --loglevel=debug"
 ```
 
 > **Important:** Always start the worker **before** the beat, or at the same time. If the beat fires with no worker online, the task will be queued in RabbitMQ and executed once a worker connects.
@@ -231,7 +232,7 @@ Edit `config.json` — change `hour` and `minute` in the task config. The schedu
 ## Testing
 
 ```bash
-pytest test/
+conda run -n geo_e2e_311 pytest test/
 ```
 
 Tests cover:
