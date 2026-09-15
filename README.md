@@ -4,17 +4,21 @@ GIS Data End-to-End Pipeline — a Celery-based task scheduler that orchestrates
 
 ## Overview
 
-GEO_E2E is the orchestration layer in the GIS data pipeline. It runs as a Celery Beat scheduler with RabbitMQ as the message broker, triggering automated data downloads at configured schedules. Each task spawns a subprocess to execute `GEO_Download/run_download.py`, which handles the actual HTTP fetching and CSV storage.
+GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download data itself — instead, it schedules and monitors download jobs by spawning subprocesses that execute `GEO_Download/run_download.py`.
 
-The application is designed to work alongside GEO_Download — it does not download data itself, but rather schedules and monitors the download jobs.
+The system requires two always-on processes:
+1. **Celery Beat** — a scheduler that sends tasks to RabbitMQ at configured cron-like intervals.
+2. **Celery Worker** — a process that picks up tasks from the queue and executes the actual download subprocess.
+
+RabbitMQ acts as the message broker between them, ensuring tasks are queued reliably even if the worker is temporarily offline.
 
 ## Features
 
 - **Cron-like scheduling** — define per-source download schedules with month, day, hour, minute, and timezone.
-- **Timezone-aware** — automatically converts local schedule times to UTC for Celery Beat.
-- **Subprocess execution** — spawns isolated download processes, capturing stdout/stderr for logging.
+- **Timezone-aware** — schedule times are specified in local timezone (e.g. `Europe/Warsaw`) and converted to UTC automatically.
+- **Subprocess execution** — each download runs as an isolated subprocess, capturing stdout/stderr for logging.
 - **Structured logging** — each download job produces a timestamped log file under `logs/<source>/`.
-- **Beat cleanup** — automatically removes stale Celery Beat schedule files on startup.
+- **Beat cleanup** — automatically removes stale Celery Beat schedule files on startup to prevent corruption.
 - **Frozen Pydantic models** — all configuration objects are immutable.
 
 ## Workflow
@@ -25,10 +29,12 @@ flowchart TD
     B -->|broker| C[RabbitMQ]
     B -->|tasks| D[Celery Beat Scheduler]
     D -->|cron trigger| E[geo_download task]
-    E -->|subprocess| F[GEO_Download/run_download.py]
-    F -->|HTTP GET| G[USGS FDSN API]
-    G -->|CSV response| H[Parse & Save CSV]
-    E -->|logging| I[logs/source/celery_*.log]
+    E -->|queue| C
+    C -->|dispatch| F[Celery Worker]
+    F -->|subprocess| G[GEO_Download/run_download.py]
+    G -->|HTTP GET| H[USGS FDSN API]
+    H -->|CSV response| I[Parse & Save CSV]
+    F -->|logging| J[logs/source/celery_*.log]
 ```
 
 ## Tech Stack
@@ -168,24 +174,51 @@ All settings are in `config.json`:
 
 ### Start the Celery worker and beat scheduler
 
+Both processes must run simultaneously in **separate terminals**. The worker executes tasks; the beat sends them on schedule.
+
+**Terminal 1 — Worker** (executes downloads):
+
 ```bash
-celery -A app.geo_app worker --loglevel=info &
-celery -A app.geo_app beat --loglevel=info &
+conda activate geo_e2e_311
+cd ~/AI\ Solutions/GeographicData/GEO_E2E
+celery -A app.geo_app worker --loglevel=info
 ```
 
-Or run beat in foreground for debugging:
+**Terminal 2 — Beat** (sends tasks on schedule):
 
 ```bash
+conda activate geo_e2e_311
+cd ~/AI\ Solutions/GeographicData/GEO_E2E
 celery -A app.geo_app beat --loglevel=debug
 ```
 
+> **Important:** Always start the worker **before** the beat, or at the same time. If the beat fires with no worker online, the task will be queued in RabbitMQ and executed once a worker connects.
+
 ### How it works
 
-1. Celery Beat triggers `geo_download` task at the configured schedule.
-2. The task builds a shell command: `cd ../GEO_Download; python run_download.py <source_name>`.
-3. A subprocess executes the command, capturing stdout and stderr.
-4. Output is logged to `logs/<source>/celery_<source>_<timestamp>.log`.
-5. On failure, the task raises `CalledProcessError` and logs the error.
+1. Celery Beat triggers `geo_download` task at the configured schedule (converted to UTC automatically).
+2. The worker picks up the task from the RabbitMQ queue.
+3. The task builds a shell command: `cd ../GEO_Download; python run_download.py <source_name>`.
+4. A subprocess executes the command, capturing stdout and stderr.
+5. Output is logged to `logs/<source>/celery_<source>_<timestamp>.log`.
+6. On failure, the task raises `CalledProcessError` and logs the error.
+
+### Modifying the schedule
+
+Edit `config.json` — change `hour` and `minute` in the task config. The schedule uses your local timezone (e.g. `Europe/Warsaw`), converted to UTC automatically. Restart the beat process after changes.
+
+```json
+{
+  "tasks": [
+    {
+      "source_name": "USGS_Earthquake",
+      "hour": 2,
+      "minute": 0,
+      "timezone": "Europe/Warsaw"
+    }
+  ]
+}
+```
 
 ### Example log output
 

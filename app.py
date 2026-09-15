@@ -7,11 +7,11 @@ from celery.schedules import crontab
 from util import celerybeat_cleanup, setup_logger, to_utc
 from model import CeleryAppConfig, get_job_config
 
+celerybeat_cleanup()
+
 config = CeleryAppConfig.from_config()
 job_config = get_job_config()
 geo_app = celery.Celery(config.name, broker=config.get_rabbitmq_broker_string())
-
-celerybeat_cleanup()
 
 geo_app.conf.beat_schedule = {
     task.name: {
