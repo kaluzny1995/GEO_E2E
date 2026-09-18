@@ -2,7 +2,7 @@ import json
 import pytest
 from unittest.mock import patch
 
-from model import CeleryTask, CeleryAppConfig, JobConfig, get_job_config
+from model import CeleryTask, CelerySettings, CeleryAppConfig, JobConfig, get_job_config
 
 
 def test_celery_task_creation():
@@ -43,6 +43,41 @@ def test_celery_task_int_fields():
     assert task.day == 15
     assert task.hour == 10
     assert task.minute == 30
+
+
+def test_celery_settings_defaults():
+    # Arrange
+    # Act
+    settings = CelerySettings()
+
+    # Assert
+    assert settings.task_time_limit == 600
+    assert settings.task_soft_time_limit == 480
+    assert settings.worker_max_tasks_per_child == 20
+    assert settings.worker_max_memory_per_child == 400000
+    assert settings.worker_prefetch_multiplier == 1
+    assert settings.task_acks_late is True
+
+
+def test_celery_settings_custom():
+    # Arrange
+    # Act
+    settings = CelerySettings(
+        task_time_limit=300,
+        task_soft_time_limit=240,
+        worker_max_tasks_per_child=10,
+        worker_max_memory_per_child=200000,
+        worker_prefetch_multiplier=2,
+        task_acks_late=False,
+    )
+
+    # Assert
+    assert settings.task_time_limit == 300
+    assert settings.task_soft_time_limit == 240
+    assert settings.worker_max_tasks_per_child == 10
+    assert settings.worker_max_memory_per_child == 200000
+    assert settings.worker_prefetch_multiplier == 2
+    assert settings.task_acks_late is False
 
 
 def test_job_config_creation():
@@ -119,6 +154,14 @@ def test_celery_app_config_from_config(tmp_path):
             "password": "pass",
             "host": "127.0.0.1",
             "port": 5672,
+            "celery_settings": {
+                "task_time_limit": 300,
+                "task_soft_time_limit": 240,
+                "worker_max_tasks_per_child": 10,
+                "worker_max_memory_per_child": 200000,
+                "worker_prefetch_multiplier": 2,
+                "task_acks_late": False,
+            },
             "tasks": [
                 {
                     "source_name": "TestSource",
@@ -143,3 +186,9 @@ def test_celery_app_config_from_config(tmp_path):
     assert len(result.tasks) == 1
     assert result.tasks[0].source_name == "TestSource"
     assert result.tasks[0].hour == 3
+    assert result.celery_settings.task_time_limit == 300
+    assert result.celery_settings.task_soft_time_limit == 240
+    assert result.celery_settings.worker_max_tasks_per_child == 10
+    assert result.celery_settings.worker_max_memory_per_child == 200000
+    assert result.celery_settings.worker_prefetch_multiplier == 2
+    assert result.celery_settings.task_acks_late is False

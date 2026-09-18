@@ -178,19 +178,21 @@ Both processes must run simultaneously in **separate terminals**. The worker exe
 **Terminal 1 — Worker** (executes downloads):
 
 ```bash
-conda run -n geo_e2e_311 celery -A app.geo_app worker --loglevel=info
+conda run -n geo_e2e_311 celery -A app.geo_app worker --loglevel=info --concurrency=2
 ```
+
+> `--concurrency=2` limits the worker to 2 simultaneous download processes (default is # of CPU cores). Combined with `worker_max_memory_per_child` and `task_time_limit` configured in `app.py`, this prevents memory exhaustion from piled-up downloads.
 
 **Terminal 2 — Beat** (sends tasks on schedule):
 
 ```bash
-conda run -n geo_e2e_311 celery -A app.geo_app beat --loglevel=debug
+conda run -n geo_e2e_311 celery -A app.geo_app beat --loglevel=info
 ```
 
 Or run both in one command (worker in background, beat in foreground):
 
 ```bash
-conda run -n geo_e2e_311 bash -c "celery -A app.geo_app worker --loglevel=info & celery -A app.geo_app beat --loglevel=debug"
+conda run -n geo_e2e_311 bash -c "celery -A app.geo_app worker --loglevel=info --concurrency=2 & celery -A app.geo_app beat --loglevel=info"
 ```
 
 > **Important:** Always start the worker **before** the beat, or at the same time. If the beat fires with no worker online, the task will be queued in RabbitMQ and executed once a worker connects.
@@ -200,9 +202,10 @@ conda run -n geo_e2e_311 bash -c "celery -A app.geo_app worker --loglevel=info &
 1. Celery Beat triggers `geo_download` task at the configured schedule (converted to UTC automatically).
 2. The worker picks up the task from the RabbitMQ queue.
 3. The task builds a shell command: `cd ../GEO_Download; python run_download.py <source_name>`.
-4. A subprocess executes the command, capturing stdout and stderr.
+4. A subprocess executes the command, with output streamed directly to the log file (no in-memory buffering).
 5. Output is logged to `logs/<source>/celery_<source>_<timestamp>.log`.
 6. On failure, the task raises `CalledProcessError` and logs the error.
+7. If a download hangs, it is killed after 10 minutes (`task_time_limit` in `app.py`).
 
 ### Modifying the schedule
 
