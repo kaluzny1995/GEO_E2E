@@ -1,6 +1,8 @@
 import os
+import logging
 import pytest
 import datetime as dt
+from unittest.mock import patch, MagicMock
 
 import util
 
@@ -91,3 +93,72 @@ def test_setup_logger_creates_nested_directory(tmp_path):
 
     # Assert
     assert os.path.exists(log_file)
+
+
+def test_get_memory_info():
+    # Arrange
+    # Act
+    used_gb, total_gb, percent = util.get_memory_info()
+
+    # Assert
+    assert total_gb > 0
+    assert used_gb > 0
+    assert used_gb <= total_gb
+    assert 0 <= percent <= 100
+
+
+def test_get_memory_info_returns_floats():
+    # Arrange
+    # Act
+    used_gb, total_gb, percent = util.get_memory_info()
+
+    # Assert
+    assert isinstance(used_gb, float)
+    assert isinstance(total_gb, float)
+    assert isinstance(percent, float)
+
+
+@patch("util.psutil.virtual_memory")
+def test_get_memory_info_mocked(mock_vmem):
+    # Arrange
+    mock_vmem.return_value = MagicMock(used=8 * 1024 ** 3, total=16 * 1024 ** 3, percent=50.0)
+
+    # Act
+    used_gb, total_gb, percent = util.get_memory_info()
+
+    # Assert
+    assert used_gb == 8.0
+    assert total_gb == 16.0
+    assert percent == 50.0
+
+
+@patch("util.get_memory_info")
+def test_log_memory_usage(mock_get_memory, tmp_path):
+    # Arrange
+    mock_get_memory.return_value = (3.21, 15.54, 20.66)
+    log_file = str(tmp_path / "test.log")
+    logger = util.setup_logger(name="test_log_memory", log_file=log_file)
+
+    # Act
+    util.log_memory_usage(logger, "Worker")
+
+    # Assert
+    with open(log_file) as f:
+        content = f.read()
+    assert "Worker Memory: 3.21 out of 15.54 GiB (20.66 %) used" in content
+
+
+@patch("util.get_memory_info")
+def test_log_memory_usage_subprocess_label(mock_get_memory, tmp_path):
+    # Arrange
+    mock_get_memory.return_value = (1.50, 8.00, 18.75)
+    log_file = str(tmp_path / "test2.log")
+    logger = util.setup_logger(name="test_log_memory_sub", log_file=log_file)
+
+    # Act
+    util.log_memory_usage(logger, "Subprocess")
+
+    # Assert
+    with open(log_file) as f:
+        content = f.read()
+    assert "Subprocess Memory: 1.50 out of 8.00 GiB (18.75 %) used" in content

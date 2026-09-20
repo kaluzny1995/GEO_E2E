@@ -18,6 +18,7 @@ RabbitMQ acts as the message broker between them, ensuring tasks are queued reli
 - **Timezone-aware** — schedule times are specified in local timezone (e.g. `Europe/Warsaw`) and converted to UTC automatically.
 - **Subprocess execution** — each download runs as an isolated subprocess, capturing stdout/stderr for logging.
 - **Structured logging** — each download job produces a timestamped log file under `logs/<source>/`.
+- **Memory monitoring** — logs system, worker, and subprocess memory usage (`xxx out of yyy GiB (zzz %) used`) at task start and finish.
 - **Beat cleanup** — automatically removes stale Celery Beat schedule files on startup to prevent corruption.
 - **Frozen Pydantic models** — all configuration objects are immutable.
 
@@ -47,6 +48,7 @@ flowchart TD
 | Data Validation  | Pydantic >= 2.0.0                           |
 | HTTP Client      | requests >= 2.31.0 (used by GEO_Download)  |
 | Timezone         | pytz >= 2023.3                              |
+| Memory Monitor   | psutil >= 5.9.0                             |
 | Testing          | pytest >= 7.0.0                             |
 | Environment      | Conda                                       |
 
@@ -228,8 +230,11 @@ Edit `config.json` — change `hour` and `minute` in the task config. The schedu
 
 ```
 2026-09-14 02:00:01 INFO ---- Celery triggered download for USGS_Earthquake ----
+2026-09-14 02:00:01 INFO Worker Memory: 3.25 out of 15.54 GiB (20.91 %) used
 2026-09-14 02:00:01 INFO Running command: cd ..;cd GEO_Download;python run_download.py USGS_Earthquake
 2026-09-14 02:00:15 INFO Download completed successfully for USGS_Earthquake
+2026-09-14 02:00:15 INFO Subprocess Memory: 3.31 out of 15.54 GiB (21.30 %) used
+2026-09-14 02:00:15 INFO Worker Memory: 3.31 out of 15.54 GiB (21.30 %) used
 ```
 
 ## Testing
@@ -243,6 +248,7 @@ Tests cover:
 - **Config loading** — `from_config()` and `get_job_config()` with mock JSON files
 - **Broker string** — RabbitMQ connection string generation
 - **Command pattern** — subprocess command construction
+- **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
 
 ## Related Projects
 

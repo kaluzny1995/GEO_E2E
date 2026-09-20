@@ -1,10 +1,11 @@
 import subprocess
+import logging
 import datetime as dt
 
 import celery
 from celery.schedules import crontab
 
-from util import celerybeat_cleanup, setup_logger, to_utc
+from util import celerybeat_cleanup, setup_logger, to_utc, log_memory_usage
 from model import CeleryAppConfig, get_job_config
 
 celerybeat_cleanup()
@@ -41,6 +42,9 @@ geo_app.conf.beat_schedule = {
     for task in config.tasks
 }
 
+_startup_logger = logging.getLogger("geo_e2e.startup")
+log_memory_usage(_startup_logger, "System")
+
 
 @geo_app.task
 def geo_download(source_name: str) -> None:
@@ -53,6 +57,7 @@ def geo_download(source_name: str) -> None:
     )
 
     logger.info(f"---- Celery triggered download for {source_name} ----")
+    log_memory_usage(logger, "Worker")
 
     command = f"{job_config.get_command_pattern_string()} {source_name}"
     logger.info(f"Running command: {command}")
@@ -74,3 +79,6 @@ def geo_download(source_name: str) -> None:
         logger.warning(f"Download for {source_name} exited with return code {process.returncode} (likely nothing to download)")
     else:
         logger.info(f"Download completed successfully for {source_name}")
+
+    log_memory_usage(logger, "Subprocess")
+    log_memory_usage(logger, "Worker")
