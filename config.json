@@ -1,10 +1,10 @@
 {
   "celery_app": {
     "name": "geo_download_app",
-    "username": "mq_admin",
-    "password": "mq_admin",
+    "username": "geo_mq_admin",
+    "password": "geo_mq_admin",
     "host": "localhost",
-    "port": 5672,
+    "port": 5673,
     "celery_settings": {
       "task_time_limit": 600,
       "task_soft_time_limit": 480,
