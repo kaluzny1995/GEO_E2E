@@ -2,7 +2,7 @@ import json
 import pytest
 from unittest.mock import patch
 
-from model import CeleryTask, CelerySettings, CeleryAppConfig, JobConfig, get_job_config
+from model import CeleryTask, CelerySettings, CeleryAppConfig, JobConfig, JobTypeConfig, get_job_config
 
 
 def test_celery_task_creation():
@@ -10,6 +10,7 @@ def test_celery_task_creation():
     # Act
     task = CeleryTask(
         source_name="USGS_Earthquake",
+        table_name="usgs_earthquake",
         month="*",
         day="*",
         hour=2,
@@ -20,9 +21,27 @@ def test_celery_task_creation():
 
     # Assert
     assert task.source_name == "USGS_Earthquake"
+    assert task.table_name == "usgs_earthquake"
     assert task.hour == 2
     assert task.minute == 0
     assert task.timezone == "Europe/Warsaw"
+
+
+def test_celery_task_table_name_defaults_to_none():
+    # Arrange
+    # Act
+    task = CeleryTask(
+        source_name="Test",
+        month="*",
+        day="*",
+        hour=2,
+        minute=0,
+        timezone="UTC",
+        name="download_Test"
+    )
+
+    # Assert
+    assert task.table_name is None
 
 
 def test_celery_task_int_fields():
@@ -80,10 +99,10 @@ def test_celery_settings_custom():
     assert settings.task_acks_late is False
 
 
-def test_job_config_creation():
+def test_job_type_config_creation():
     # Arrange
     # Act
-    config = JobConfig(
+    config = JobTypeConfig(
         folder_name="GEO_Download",
         python_script="run_download.py"
     )
@@ -91,11 +110,12 @@ def test_job_config_creation():
     # Assert
     assert config.folder_name == "GEO_Download"
     assert config.python_script == "run_download.py"
+    assert config.conda_env is None
 
 
-def test_job_config_get_command_pattern_string():
+def test_job_type_config_get_command_pattern_string_without_conda_env():
     # Arrange
-    config = JobConfig(
+    config = JobTypeConfig(
         folder_name="GEO_Download",
         python_script="run_download.py"
     )
@@ -105,6 +125,52 @@ def test_job_config_get_command_pattern_string():
 
     # Assert
     assert result == "cd ..;cd GEO_Download;python run_download.py"
+
+
+def test_job_type_config_get_command_pattern_string_with_conda_env():
+    # Arrange
+    config = JobTypeConfig(
+        folder_name="GEO_ETL",
+        python_script="run_etl.py",
+        conda_env="geo_etl_311"
+    )
+
+    # Act
+    result = config.get_command_pattern_string()
+
+    # Assert
+    assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py"
+
+
+def test_job_type_config_get_command_string():
+    # Arrange
+    config = JobTypeConfig(
+        folder_name="GEO_ETL",
+        python_script="run_etl.py",
+        conda_env="geo_etl_311"
+    )
+
+    # Act
+    result = config.get_command_string("INGESTION", "nifc_fire")
+
+    # Assert
+    assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
+
+
+def test_job_config_creation():
+    # Arrange
+    # Act
+    config = JobConfig(
+        download=JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py"),
+        ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311")
+    )
+
+    # Assert
+    assert config.download.folder_name == "GEO_Download"
+    assert config.download.python_script == "run_download.py"
+    assert config.ingestion.folder_name == "GEO_ETL"
+    assert config.ingestion.python_script == "run_etl.py"
+    assert config.ingestion.conda_env == "geo_etl_311"
 
 
 def test_celery_app_config_get_rabbitmq_broker_string():
@@ -130,8 +196,16 @@ def test_get_job_config(tmp_path):
     config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({
         "job": {
-            "folder_name": "TestFolder",
-            "python_script": "test_script.py"
+            "download": {
+                "folder_name": "TestFolder",
+                "python_script": "test_script.py",
+                "conda_env": "test_download_env"
+            },
+            "ingestion": {
+                "folder_name": "TestEtlFolder",
+                "python_script": "test_etl_script.py",
+                "conda_env": "test_env"
+            }
         }
     }))
 
@@ -140,8 +214,12 @@ def test_get_job_config(tmp_path):
         result = get_job_config()
 
     # Assert
-    assert result.folder_name == "TestFolder"
-    assert result.python_script == "test_script.py"
+    assert result.download.folder_name == "TestFolder"
+    assert result.download.python_script == "test_script.py"
+    assert result.download.conda_env == "test_download_env"
+    assert result.ingestion.folder_name == "TestEtlFolder"
+    assert result.ingestion.python_script == "test_etl_script.py"
+    assert result.ingestion.conda_env == "test_env"
 
 
 def test_celery_app_config_from_config(tmp_path):
@@ -165,6 +243,7 @@ def test_celery_app_config_from_config(tmp_path):
             "tasks": [
                 {
                     "source_name": "TestSource",
+                    "table_name": "test_source",
                     "month": "*",
                     "day": "*",
                     "hour": 3,

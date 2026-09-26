@@ -9,6 +9,7 @@ _CONFIG_PATH = os.path.join(_PROJECT_DIR, "config.json")
 
 class CeleryTask(BaseModel):
     source_name: str
+    table_name: str | None = None
     month: int | str
     day: int | str
     hour: int | str
@@ -17,15 +18,28 @@ class CeleryTask(BaseModel):
     name: str
 
 
-class JobConfig(BaseModel):
+class JobTypeConfig(BaseModel):
     folder_name: str
     python_script: str
+    conda_env: str | None = None
 
     class ConfigDict:
         frozen = True
 
     def get_command_pattern_string(self) -> str:
-        return f"cd ..;cd {self.folder_name};python {self.python_script}"
+        conda_part = f"conda run --no-capture-output -n {self.conda_env} " if self.conda_env else ""
+        return f"cd ..;cd {self.folder_name};{conda_part}python {self.python_script}"
+
+    def get_command_string(self, *args: str) -> str:
+        return f"{self.get_command_pattern_string()} {' '.join(args)}"
+
+
+class JobConfig(BaseModel):
+    download: JobTypeConfig
+    ingestion: JobTypeConfig
+
+    class ConfigDict:
+        frozen = True
 
 
 class CelerySettings(BaseModel):

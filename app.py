@@ -37,7 +37,7 @@ geo_app.conf.beat_schedule = {
         "task": "app.geo_download",
         "schedule": crontab(hour=to_utc(task.hour, task.timezone), minute=task.minute,
                             day_of_month=task.day, month_of_year=task.month),
-        "args": [task.source_name],
+        "args": [task.source_name, task.table_name],
     }
     for task in config.tasks
 }
@@ -46,24 +46,9 @@ _startup_logger = logging.getLogger("geo_e2e.startup")
 log_memory_usage(_startup_logger, "System")
 
 
-@geo_app.task
-def geo_download(source_name: str) -> None:
-    """ Download geo data for given source """
-    log_dir = f"logs/{source_name}"
-    log_file = f"{log_dir}/celery_{source_name}_{dt.datetime.now().isoformat()}.log"
-    logger = setup_logger(
-        name=f"celery_download_{source_name}",
-        log_file=log_file,
-    )
-
-    logger.info(f"---- Celery triggered download for {source_name} ----")
-    log_memory_usage(logger, "Worker")
-
-    command = f"{job_config.get_command_pattern_string()} {source_name}"
-    logger.info(f"Running command: {command}")
-
-    # Stream subprocess output directly to the log file instead of buffering
-    # it all in worker memory via PIPE.
+def _run_command(command: str, log_file: str) -> int:
+    """ Run a shell command streaming its output directly to the log file
+        instead of buffering it all in worker memory via PIPE. """
     with open(log_file, "a") as log_fh:
         process = subprocess.Popen(
             command,
@@ -75,10 +60,51 @@ def geo_download(source_name: str) -> None:
         )
         process.wait()
 
-    if process.returncode != 0:
-        logger.warning(f"Download for {source_name} exited with return code {process.returncode} (likely nothing to download)")
+    return process.returncode
+
+
+@geo_app.task
+def geo_download(source_name: str, table_name: str | None = None) -> None:
+    """ Download geo data for given source, then ingest it into GEO_ETL tables """
+    log_dir = f"logs/{source_name}"
+    log_file = f"{log_dir}/celery_{source_name}_{dt.datetime.now().isoformat()}.log"
+    logger = setup_logger(
+        name=f"celery_download_{source_name}",
+        log_file=log_file,
+    )
+
+    logger.info(f"---- Celery triggered download for {source_name} ----")
+    log_memory_usage(logger, "Worker")
+
+    command = job_config.download.get_command_string(source_name)
+    logger.info(f"Running command: {command}")
+    returncode = _run_command(command, log_file)
+
+    if returncode != 0:
+        logger.warning(f"Download for {source_name} exited with return code {returncode} "
+                       f"(likely nothing to download) — skipping ingestion for {source_name}")
+        log_memory_usage(logger, "Subprocess")
+        log_memory_usage(logger, "Worker")
+        return
+    logger.info(f"Download completed successfully for {source_name}")
+    log_memory_usage(logger, "Subprocess")
+
+    if table_name is None:
+        logger.info(f"No ingestion table configured for {source_name} — nothing to ingest")
+        log_memory_usage(logger, "Worker")
+        return
+
+    logger.info(f"---- Celery triggered ingestion for {source_name} -> {table_name} ----")
+
+    command = job_config.ingestion.get_command_string("INGESTION", table_name)
+    logger.info(f"Running command: {command}")
+    returncode = _run_command(command, log_file)
+
+    if returncode != 0:
+        logger.warning(f"Ingestion for {table_name} exited with return code {returncode} "
+                       f"(likely no new files to upload)")
     else:
-        logger.info(f"Download completed successfully for {source_name}")
+        logger.info(f"Ingestion completed successfully for {table_name}")
 
     log_memory_usage(logger, "Subprocess")
     log_memory_usage(logger, "Worker")

@@ -6,8 +6,8 @@
     "host": "localhost",
     "port": 5673,
     "celery_settings": {
-      "task_time_limit": 600,
-      "task_soft_time_limit": 480,
+      "task_time_limit": 1800,
+      "task_soft_time_limit": 1500,
       "worker_max_tasks_per_child": 20,
       "worker_max_memory_per_child": 400000,
       "worker_prefetch_multiplier": 1,
@@ -16,6 +16,7 @@
     "tasks": [
       {
         "source_name": "USGS_Earthquake",
+        "table_name": "usgs_earthquake",
         "month": "*",
         "day": "*",
         "hour": 2,
@@ -25,6 +26,7 @@
       },
       {
         "source_name": "GDACS",
+        "table_name": "gdacs_event",
         "month": "*",
         "day": "*",
         "hour": 2,
@@ -34,6 +36,7 @@
       },
       {
         "source_name": "EONET",
+        "table_name": "eonet_event",
         "month": "*",
         "day": "*",
         "hour": 2,
@@ -43,6 +46,7 @@
       },
       {
         "source_name": "OpenMeteo_Flood",
+        "table_name": "openmeteo_flood",
         "month": "*",
         "day": "*",
         "hour": 2,
@@ -52,6 +56,7 @@
       },
       {
         "source_name": "USGS_NWIS",
+        "table_name": "usgs_nwis",
         "month": "*",
         "day": "*",
         "hour": 3,
@@ -61,6 +66,7 @@
       },
       {
         "source_name": "Avalanche_ORG",
+        "table_name": "avalanche_org",
         "month": "*",
         "day": "*",
         "hour": 3,
@@ -70,6 +76,7 @@
       },
       {
         "source_name": "IBTrACS",
+        "table_name": "ibtracs_cyclone",
         "month": "*",
         "day": "*",
         "hour": 3,
@@ -79,6 +86,7 @@
       },
       {
         "source_name": "USGS_Volcano",
+        "table_name": "usgs_volcano",
         "month": "*",
         "day": "*",
         "hour": 3,
@@ -88,6 +96,7 @@
       },
       {
         "source_name": "NIFC",
+        "table_name": "nifc_fire",
         "month": "*",
         "day": "*",
         "hour": 4,
@@ -98,7 +107,15 @@
     ]
   },
   "job": {
-    "folder_name": "GEO_Download",
-    "python_script": "run_download.py"
+    "download": {
+      "folder_name": "GEO_Download",
+      "python_script": "run_download.py",
+      "conda_env": "geo_download_311"
+    },
+    "ingestion": {
+      "folder_name": "GEO_ETL",
+      "python_script": "run_etl.py",
+      "conda_env": "geo_etl_311"
+    }
   }
 }
