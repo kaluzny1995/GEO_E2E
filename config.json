@@ -16,93 +16,84 @@
     "tasks": [
       {
         "source_name": "USGS_Earthquake",
-        "table_name": "usgs_earthquake",
         "month": "*",
         "day": "*",
         "hour": 2,
         "minute": 0,
         "timezone": "Europe/Warsaw",
-        "name": "download_USGS_Earthquake"
+        "name": "geo_e2e_USGS_Earthquake"
       },
       {
         "source_name": "GDACS",
-        "table_name": "gdacs_event",
         "month": "*",
         "day": "*",
         "hour": 2,
         "minute": 15,
         "timezone": "Europe/Warsaw",
-        "name": "download_GDACS"
+        "name": "geo_e2e_GDACS"
       },
       {
         "source_name": "EONET",
-        "table_name": "eonet_event",
         "month": "*",
         "day": "*",
         "hour": 2,
         "minute": 30,
         "timezone": "Europe/Warsaw",
-        "name": "download_EONET"
+        "name": "geo_e2e_EONET"
       },
       {
         "source_name": "OpenMeteo_Flood",
-        "table_name": "openmeteo_flood",
         "month": "*",
         "day": "*",
         "hour": 2,
         "minute": 45,
         "timezone": "Europe/Warsaw",
-        "name": "download_OpenMeteo_Flood"
+        "name": "geo_e2e_OpenMeteo_Flood"
       },
       {
         "source_name": "USGS_NWIS",
-        "table_name": "usgs_nwis",
         "month": "*",
         "day": "*",
         "hour": 3,
         "minute": 0,
         "timezone": "Europe/Warsaw",
-        "name": "download_USGS_NWIS"
+        "name": "geo_e2e_USGS_NWIS"
       },
       {
         "source_name": "Avalanche_ORG",
-        "table_name": "avalanche_org",
         "month": "*",
         "day": "*",
         "hour": 3,
         "minute": 15,
         "timezone": "Europe/Warsaw",
-        "name": "download_Avalanche_ORG"
+        "name": "geo_e2e_Avalanche_ORG"
       },
       {
         "source_name": "IBTrACS",
-        "table_name": "ibtracs_cyclone",
         "month": "*",
         "day": "*",
         "hour": 3,
         "minute": 30,
         "timezone": "Europe/Warsaw",
-        "name": "download_IBTrACS"
+        "name": "geo_e2e_IBTrACS"
       },
       {
         "source_name": "USGS_Volcano",
-        "table_name": "usgs_volcano",
         "month": "*",
         "day": "*",
         "hour": 3,
         "minute": 45,
         "timezone": "Europe/Warsaw",
-        "name": "download_USGS_Volcano"
+        "name": "geo_e2e_USGS_Volcano"
       },
       {
         "source_name": "NIFC",
-        "table_name": "nifc_fire",
         "month": "*",
         "day": "*",
         "hour": 4,
         "minute": 0,
         "timezone": "Europe/Warsaw",
-        "name": "download_NIFC"
+        "name": "geo_e2e_NIFC"
       }
     ]
   },

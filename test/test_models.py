@@ -10,38 +10,20 @@ def test_celery_task_creation():
     # Act
     task = CeleryTask(
         source_name="USGS_Earthquake",
-        table_name="usgs_earthquake",
         month="*",
         day="*",
         hour=2,
         minute=0,
         timezone="Europe/Warsaw",
-        name="download_USGS_Earthquake"
+        name="geo_e2e_USGS_Earthquake"
     )
 
     # Assert
     assert task.source_name == "USGS_Earthquake"
-    assert task.table_name == "usgs_earthquake"
     assert task.hour == 2
     assert task.minute == 0
     assert task.timezone == "Europe/Warsaw"
-
-
-def test_celery_task_table_name_defaults_to_none():
-    # Arrange
-    # Act
-    task = CeleryTask(
-        source_name="Test",
-        month="*",
-        day="*",
-        hour=2,
-        minute=0,
-        timezone="UTC",
-        name="download_Test"
-    )
-
-    # Assert
-    assert task.table_name is None
+    assert task.name == "geo_e2e_USGS_Earthquake"
 
 
 def test_celery_task_int_fields():
@@ -243,13 +225,12 @@ def test_celery_app_config_from_config(tmp_path):
             "tasks": [
                 {
                     "source_name": "TestSource",
-                    "table_name": "test_source",
                     "month": "*",
                     "day": "*",
                     "hour": 3,
                     "minute": 15,
                     "timezone": "UTC",
-                    "name": "test_task"
+                    "name": "geo_e2e_TestSource"
                 }
             ]
         }

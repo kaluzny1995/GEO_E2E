@@ -1,15 +1,25 @@
 import json
+import logging
 import os
+import subprocess
+from enum import Enum
 from typing import List
 from pydantic import BaseModel
 
+from util import run_command
+
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATH = os.path.join(_PROJECT_DIR, "config.json")
+_JOBS_PATH = os.path.join(_PROJECT_DIR, "jobs.json")
+
+
+class EJobType(str, Enum):
+    DOWNLOAD = "DOWNLOAD"
+    INGESTION = "INGESTION"
 
 
 class CeleryTask(BaseModel):
     source_name: str
-    table_name: str | None = None
     month: int | str
     day: int | str
     hour: int | str
@@ -87,3 +97,56 @@ class CeleryAppConfig(BaseModel):
 def get_job_config() -> JobConfig:
     with open(_CONFIG_PATH, "r") as f:
         return JobConfig(**json.load(f)['job'])
+
+
+class Job(BaseModel):
+    """ A single job in a chain — after it finishes successfully,
+        its `next_jobs` are executed recursively (same as E2EReddit's Job). """
+    source_name: str
+    job_type: EJobType
+    table_name: str | None = None
+    is_failed_if_error: bool = False
+    next_jobs: List['Job'] = []
+
+    class ConfigDict:
+        frozen = True
+
+    def get_command(self) -> str:
+        """ Build the shell command of this job from the `job` block of config.json """
+        job_config = get_job_config()
+
+        if self.job_type == EJobType.DOWNLOAD:
+            return job_config.download.get_command_string(self.source_name)
+
+        if self.table_name is None:
+            raise ValueError(f'INGESTION job for "{self.source_name}" has no table_name configured in jobs.json')
+
+        return job_config.ingestion.get_command_string(self.job_type.value, self.table_name)
+
+    def run(self, logger: logging.Logger, log_file: str) -> None:
+        """ Executes the job command and then its next jobs (only if this job succeeded) """
+        command = self.get_command()
+        logger.info(f'Starting {self.job_type.value} job for "{self.source_name}".')
+        logger.info(f"Executing command: {command}")
+
+        returncode = run_command(command, log_file)
+
+        if returncode != 0:
+            message = f'{self.job_type.value} job for "{self.source_name}" exited with return code {returncode}'
+            if self.is_failed_if_error:
+                logger.error(message)
+                raise subprocess.CalledProcessError(returncode=returncode, cmd=command)
+            logger.warning(f"{message} — next jobs will not be executed")
+            return
+
+        logger.info(f'Finished {self.job_type.value} job for "{self.source_name}". Return code: {returncode}.')
+
+        # run the next jobs
+        for next_job in self.next_jobs:
+            next_job.run(logger=logger, log_file=log_file)
+
+    @staticmethod
+    def from_config(source_name: str) -> 'Job':
+        """ Returns the root job of the chain for given source from jobs.json """
+        with open(_JOBS_PATH, "r") as f:
+            return Job(**json.load(f)[source_name])

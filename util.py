@@ -1,6 +1,7 @@
 import os
 import glob
 import logging
+import subprocess
 import psutil
 import pytz
 import datetime as dt
@@ -10,6 +11,24 @@ def celerybeat_cleanup() -> None:
     """ Celery beat cleanup before app start """
     for f in glob.glob("celerybeat-schedule*"):
         os.remove(f)
+
+
+def run_command(command: str, log_file: str) -> int:
+    """ Run a shell command streaming its output directly to the log file
+        instead of buffering it all in worker memory via PIPE.
+        Returns the command's return code. """
+    with open(log_file, "a") as log_fh:
+        process = subprocess.Popen(
+            command,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            shell=True,
+            close_fds=True,
+            start_new_session=True,   # detach so the child is killed cleanly on timeout
+        )
+        process.wait()
+
+    return process.returncode
 
 
 def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging.Logger:

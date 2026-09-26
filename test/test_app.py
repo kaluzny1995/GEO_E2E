@@ -10,71 +10,76 @@ def app_module(tmp_path, monkeypatch):
     return app
 
 
-def _recorder(results):
-    """ Build a fake _run_command that records commands and returns given return codes. """
+@pytest.fixture()
+def commands(monkeypatch):
+    """ Fake model.run_command — records commands, returns queued return codes. """
     calls = []
+    results = []
 
     def fake_run_command(command, log_file):
         calls.append(command)
-        return results[len(calls) - 1]
+        return results.pop(0) if results else 0
 
-    return calls, fake_run_command
+    monkeypatch.setattr("model.run_command", fake_run_command)
+    return calls, results
 
 
-def test_geo_download_runs_ingestion_after_successful_download(app_module, monkeypatch):
-    # Arrange
-    calls, fake_run_command = _recorder([0, 0])
-    monkeypatch.setattr(app_module, "_run_command", fake_run_command)
+DOWNLOAD_COMMAND = "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
+INGESTION_COMMAND = "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
 
+
+def test_beat_schedule_task_names(app_module):
     # Act
-    app_module.geo_download("NIFC", "nifc_fire")
+    schedule = app_module.geo_app.conf.beat_schedule
 
     # Assert
-    assert calls == [
-        "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC",
-        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire",
-    ]
+    assert set(schedule) == {
+        "geo_e2e_USGS_Earthquake",
+        "geo_e2e_GDACS",
+        "geo_e2e_EONET",
+        "geo_e2e_OpenMeteo_Flood",
+        "geo_e2e_USGS_NWIS",
+        "geo_e2e_Avalanche_ORG",
+        "geo_e2e_IBTrACS",
+        "geo_e2e_USGS_Volcano",
+        "geo_e2e_NIFC",
+    }
+    for entry in schedule.values():
+        assert entry["task"] == "app.geo_e2e"
+        assert len(entry["args"]) == 1
 
 
-def test_geo_download_skips_ingestion_when_download_fails(app_module, monkeypatch):
+def test_geo_e2e_runs_whole_chain(app_module, commands):
     # Arrange
-    calls, fake_run_command = _recorder([1])
-    monkeypatch.setattr(app_module, "_run_command", fake_run_command)
+    calls, results = commands
+    results.extend([0, 0])
 
     # Act
-    app_module.geo_download("NIFC", "nifc_fire")
+    app_module.geo_e2e("NIFC")
 
     # Assert
-    assert calls == [
-        "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
-    ]
+    assert calls == [DOWNLOAD_COMMAND, INGESTION_COMMAND]
 
 
-def test_geo_download_skips_ingestion_without_table_name(app_module, monkeypatch):
+def test_geo_e2e_stops_chain_when_download_fails(app_module, commands):
     # Arrange
-    calls, fake_run_command = _recorder([0])
-    monkeypatch.setattr(app_module, "_run_command", fake_run_command)
+    calls, results = commands
+    results.append(1)
 
     # Act
-    app_module.geo_download("NIFC")
+    app_module.geo_e2e("NIFC")
 
     # Assert
-    assert calls == [
-        "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
-    ]
+    assert calls == [DOWNLOAD_COMMAND]
 
 
-def test_geo_download_logs_ingestion_failure(app_module, monkeypatch, tmp_path):
+def test_geo_e2e_completes_when_ingestion_fails(app_module, commands):
     # Arrange
-    calls, fake_run_command = _recorder([0, 1])
-    monkeypatch.setattr(app_module, "_run_command", fake_run_command)
+    calls, results = commands
+    results.extend([0, 1])
 
     # Act
-    app_module.geo_download("NIFC", "nifc_fire")
+    app_module.geo_e2e("NIFC")
 
     # Assert
-    assert len(calls) == 2
-    log_files = list((tmp_path / "logs" / "NIFC").glob("celery_NIFC_*.log"))
-    assert len(log_files) == 1
-    content = log_files[0].read_text()
-    assert "likely no new files to upload" in content
+    assert calls == [DOWNLOAD_COMMAND, INGESTION_COMMAND]
