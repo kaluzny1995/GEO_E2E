@@ -1,11 +1,10 @@
 """Unit tests for the helper functions defined in util.py."""
+
 import os
-import logging
-import datetime as dt
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import patch, MagicMock
 
 import util
 
@@ -30,12 +29,15 @@ def test_to_utc_warsaw_midnight() -> None:
     assert result == 22  # CEST (summer) = UTC+2
 
 
-@pytest.mark.parametrize("hour, timezone, expected", [
-    (10, "Europe/Warsaw", 8),   # CEST (summer) = UTC+2
-    (0, "Europe/Warsaw", 22),   # CEST (summer) = UTC+2
-    (12, "US/Eastern", 16),     # EDT (summer) = UTC-4
-    (0, "Asia/Tokyo", 15),      # JST = UTC+9 (no DST)
-])
+@pytest.mark.parametrize(
+    "hour, timezone, expected",
+    [
+        (10, "Europe/Warsaw", 8),  # CEST (summer) = UTC+2
+        (0, "Europe/Warsaw", 22),  # CEST (summer) = UTC+2
+        (12, "US/Eastern", 16),  # EDT (summer) = UTC-4
+        (0, "Asia/Tokyo", 15),  # JST = UTC+9 (no DST)
+    ],
+)
 def test_to_utc_parametrized(hour: int, timezone: str, expected: int) -> None:
     """to_utc() is correct across different time zones."""
     # Arrange
@@ -134,7 +136,7 @@ def test_get_memory_info_returns_floats() -> None:
 def test_get_memory_info_mocked(mock_vmem: MagicMock) -> None:
     """Values are read from psutil.virtual_memory()."""
     # Arrange
-    mock_vmem.return_value = MagicMock(used=8 * 1024 ** 3, total=16 * 1024 ** 3, percent=50.0)
+    mock_vmem.return_value = MagicMock(used=8 * 1024**3, total=16 * 1024**3, percent=50.0)
 
     # Act
     used_gb, total_gb, percent = util.get_memory_info()

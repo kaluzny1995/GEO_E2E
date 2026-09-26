@@ -1,4 +1,5 @@
 """Tests for Job chains: loading from jobs.json, command building and recursive execution."""
+
 import io
 import json
 import logging
@@ -9,9 +10,11 @@ import pytest
 
 from model import EJobType, Job
 
+LogCapture = tuple[logging.Logger, io.StringIO]
+
 
 class CommandRunner:
-    """ Fake for model.run_command — records commands and returns queued return codes. """
+    """Fake for model.run_command — records commands and returns queued return codes."""
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Install this fake as model.run_command and prepare the call/result queues."""
@@ -37,7 +40,7 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> CommandRunner:
 
 
 @pytest.fixture()
-def logger() -> tuple[logging.Logger, io.StringIO]:
+def logger() -> LogCapture:
     """Logger writing to an in-memory stream, returned as (logger, stream)."""
     log = logging.getLogger("test_jobs")
     log.handlers.clear()
@@ -50,7 +53,7 @@ def logger() -> tuple[logging.Logger, io.StringIO]:
 
 @pytest.fixture()
 def jobs_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """ Point Job.from_config() at a temporary jobs.json """
+    """Point Job.from_config() at a temporary jobs.json"""
     path = tmp_path / "jobs.json"
     monkeypatch.setattr("model._JOBS_PATH", str(path))
     return path
@@ -69,9 +72,9 @@ def _chain() -> dict:
                     "job_type": "INGESTION",
                     "table_name": "nifc_fire",
                     "is_failed_if_error": False,
-                    "next_jobs": []
+                    "next_jobs": [],
                 }
-            ]
+            ],
         }
     }
 
@@ -112,7 +115,9 @@ def test_job_get_command_download() -> None:
     result = job.get_command()
 
     # Assert
-    assert result == "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
+    assert result == (
+        "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
+    )
 
 
 def test_job_get_command_ingestion() -> None:
@@ -124,7 +129,9 @@ def test_job_get_command_ingestion() -> None:
     result = job.get_command()
 
     # Assert
-    assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
+    assert result == (
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
+    )
 
 
 def test_job_get_command_ingestion_without_table_name_raises() -> None:
@@ -137,7 +144,7 @@ def test_job_get_command_ingestion_without_table_name_raises() -> None:
         job.get_command()
 
 
-def test_run_executes_next_jobs_after_success(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+def test_run_executes_next_jobs_after_success(runner: CommandRunner, logger: LogCapture) -> None:
     """After a successful job the chained job runs with the same log file."""
     # Arrange
     job = Job(
@@ -159,7 +166,7 @@ def test_run_executes_next_jobs_after_success(runner: CommandRunner, logger: tup
     assert {log_file for _, log_file in runner.calls} == {"logs/NIFC/test.log"}
 
 
-def test_run_stops_chain_when_job_fails(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+def test_run_stops_chain_when_job_fails(runner: CommandRunner, logger: LogCapture) -> None:
     """A non-zero return code stops the chain and logs that next jobs will not run."""
     # Arrange
     job = Job(
@@ -180,7 +187,7 @@ def test_run_stops_chain_when_job_fails(runner: CommandRunner, logger: tuple[log
     assert "next jobs will not be executed" in stream.getvalue()
 
 
-def test_run_does_not_raise_when_is_failed_if_error_is_false(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+def test_run_does_not_raise_when_is_failed_if_error_is_false(runner: CommandRunner, logger: LogCapture) -> None:
     """With is_failed_if_error=false a failing job only logs a warning."""
     # Arrange
     job = Job(
@@ -199,7 +206,7 @@ def test_run_does_not_raise_when_is_failed_if_error_is_false(runner: CommandRunn
     assert len(runner.commands) == 1
 
 
-def test_run_raises_when_is_failed_if_error_is_true(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+def test_run_raises_when_is_failed_if_error_is_true(runner: CommandRunner, logger: LogCapture) -> None:
     """With is_failed_if_error=true a failing job raises CalledProcessError."""
     # Arrange
     job = Job(

@@ -56,6 +56,9 @@ flowchart TD
 | Timezone         | pytz >= 2023.3                              |
 | Memory Monitor   | psutil >= 5.9.0                             |
 | Testing          | pytest >= 7.0.0                             |
+| Linting/Format   | ruff >= 0.6 (lint + format + import sort)   |
+| Check runner     | tox >= 4.0 (isolated lint/test/typecheck)   |
+| Type checking    | mypy >= 1.10 (run via `tox -e typecheck`)   |
 | Environment      | Conda                                       |
 | Cluster          | Docker Compose (RabbitMQ + Spark 3.5.5)     |
 
@@ -70,7 +73,9 @@ GEO_E2E/
 ├── jobs.json             # Job chains per data source: job_type -> next_jobs
 ├── model.py              # Pydantic models: CeleryAppConfig, CeleryTask, JobConfig, Job
 ├── util.py               # Logger setup, timezone conversion, beat cleanup, run_command
-├── environment.yml       # Conda environment definition
+├── environment.yml       # Conda environment definition (Python + ruff/tox/mypy)
+├── pyproject.toml        # Ruff rules, formatter style and pytest options
+├── tox.ini               # lint / test / typecheck / format / warnings environments
 ├── logs/                 # Timestamped log files per source
 │   └── USGS_Earthquake/
 └── test/                 # Unit tests
@@ -94,10 +99,16 @@ GEO_E2E/
 
 ### 1. Create the Conda environments
 
-This project's own environment:
+This project's own environment (ruff, tox and mypy come from the `pip:` section):
 
 ```bash
 conda env create -f environment.yml
+```
+
+For an environment that already exists:
+
+```bash
+conda env update -f environment.yml
 ```
 
 The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json`), so create those too if they don't exist yet:
@@ -226,7 +237,7 @@ All settings are in `config.json`:
 | `source_name` | Must match a source key in `jobs.json` and in GEO_Download's `config.json` |
 | `month`       | Cron month (`*` = every month, `1`-`12`)                      |
 | `day`         | Cron day of month (`*` = every day, `1`-`31`)                 |
-| `hour`        | Hour in local timezone (converted to UTC automatically)        |
+| `hour`        | Hour of day as an integer `0`-`23` in local timezone (converted to UTC automatically; `*` is not supported) |
 | `minute`      | Minute (`0`-`59`)                                             |
 | `timezone`    | IANA timezone string (e.g. `Europe/Warsaw`, `UTC`)            |
 | `name`        | Unique Celery Beat task name, conventionally `geo_e2e_<source_name>` (e.g. `geo_e2e_NIFC`) |
@@ -360,10 +371,14 @@ Edit `config.json` — change `hour` and `minute` in the task config. The schedu
 2026-09-14 02:01:03 INFO Worker Memory: 4.12 out of 15.54 GiB (26.52 %) used
 ```
 
-## Testing
+## Testing & Code Quality
+
+### Tests
 
 ```bash
-conda run -n geo_e2e_311 pytest test/
+conda run -n geo_e2e_311 pytest test/     # options come from pyproject.toml (testpaths = test, -q)
+tox -e py311                              # the same suite, in an isolated tox environment
+tox -e py311 -- -k jobs                   # filtered run (arguments after -- are passed to pytest)
 ```
 
 Tests cover:
@@ -374,6 +389,55 @@ Tests cover:
 - **Job chains** — `Job.from_config()` loads `jobs.json`, `Job.run()` executes `next_jobs` recursively, stops on failure and raises only when `is_failed_if_error` is set
 - **Task wiring** — beat schedule entries named `geo_e2e_<source>` calling `app.geo_e2e`, chain execution and failure handling
 - **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
+
+### Ruff, mypy and tox
+
+Linting, formatting, type checking and tests are driven by **[Ruff](https://docs.astral.sh/ruff/)**, **[mypy](https://mypy.readthedocs.io/)** and **[tox](https://tox.wiki/)** — the same tooling as GEO_Download. All three are installed from the `pip:` section of `environment.yml`:
+
+```bash
+conda env update -f environment.yml   # only needed once if the env already existed
+```
+
+| Tool | Role | Where it is configured |
+|------|------|------------------------|
+| **Ruff** | Linter + formatter + import sorter (replaces flake8 / isort / black) | `pyproject.toml` → `[tool.ruff]`, `[tool.ruff.lint]`, `[tool.ruff.format]` |
+| **mypy** | Static type checking of `app.py`, `model.py`, `util.py` | `pyproject.toml` → `[tool.mypy]`, `tox.ini` → `[testenv:typecheck]` |
+| **tox** | Runs every check in a throwaway virtualenv with its own dependencies | `tox.ini` |
+| **pytest** | Test suite | `pyproject.toml` → `[tool.pytest.ini_options]` |
+
+Direct commands while editing:
+
+```bash
+ruff check .                            # lint everything, writes nothing
+ruff check --fix .                      # apply safe autofixes (imports, modernization, unused code)
+ruff check --output-format=concise .    # one line per finding — good for CI logs
+ruff format --check .                   # list files that are not canonically formatted
+ruff format .                           # rewrite files in style (line length 120)
+mypy                                    # type check (target files come from pyproject.toml)
+```
+
+Ruff rules: `line-length = 120`, `target-version = "py311"`; `logs/`, `__pycache__` and `.idea` are excluded. Enabled families: `E,W` (pycodestyle), `F` (pyflakes), `I` (import sorting), `B` (bugbear), `UP` (pyupgrade), `C4` (comprehensions), `SIM` (simplify), `RUF` (ruff-specific), with `SIM108` ignored. Celery has no type stubs, so `celery*` is marked `ignore_missing_imports` in `[tool.mypy.overrides]`.
+
+### tox environments
+
+`tox` with no arguments runs the default `envlist` from `tox.ini` (`lint, py311`):
+
+| Command | What runs | Status |
+|---------|-----------|--------|
+| `tox` | default gate = `lint` + `py311` | ✅ |
+| `tox -e lint` | `ruff check --output-format=concise .` | ✅ 0 findings |
+| `tox -e py311` | full pytest suite (40 tests) | ✅ |
+| `tox -e typecheck` | `mypy` (`app.py`, `model.py`, `util.py`) | ✅ 0 errors |
+| `tox -e format` | `ruff format --check .` | ✅ 9 files already formatted |
+| `tox -e warnings` | `pytest -W error::DeprecationWarning` | ✅ |
+| `tox -e format-fix` | `ruff format .` — writes the changes | – |
+| `tox -e lint,py311,typecheck` | any list of environments in one invocation | – |
+
+Notes:
+
+- tox creates its environments under `.tox/` (git-ignored) and installs each env's `deps` from `tox.ini`; your shell only needs `tox` itself — no conda activation is required.
+- `skip_install = true` everywhere — the project is not installed as a package, tests import it from the working directory.
+- To add a new check, add a `[testenv:xxx]` block; append `xxx` to `envlist` to make it part of the default `tox` run.
 
 ## Related Projects
 

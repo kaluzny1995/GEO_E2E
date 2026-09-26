@@ -1,4 +1,5 @@
 """Tests for the Celery app: beat schedule entries and the geo_e2e task chain behaviour."""
+
 from pathlib import Path
 from types import ModuleType
 
@@ -7,21 +8,22 @@ import pytest
 
 @pytest.fixture()
 def app_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """ Import app.py with cwd switched to a temp dir so the module-level
-        celerybeat_cleanup() does not delete real celerybeat-schedule files. """
+    """Import app.py with cwd switched to a temp dir so the module-level
+    celerybeat_cleanup() does not delete real celerybeat-schedule files."""
     monkeypatch.chdir(tmp_path)
     import app
+
     return app
 
 
 @pytest.fixture()
 def commands(monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[int]]:
-    """ Fake model.run_command — records commands, returns queued return codes. """
+    """Fake model.run_command — records commands, returns queued return codes."""
     calls = []
     results = []
 
     def fake_run_command(command: str, log_file: str) -> int:
-        """ Record the command and pop the next queued return code (0 when none left). """
+        """Record the command and pop the next queued return code (0 when none left)."""
         calls.append(command)
         return results.pop(0) if results else 0
 
@@ -30,7 +32,9 @@ def commands(monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[int]]:
 
 
 DOWNLOAD_COMMAND = "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
-INGESTION_COMMAND = "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
+INGESTION_COMMAND = (
+    "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
+)
 
 
 def test_beat_schedule_task_names(app_module: ModuleType) -> None:

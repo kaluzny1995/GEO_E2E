@@ -1,11 +1,10 @@
 """Unit tests for the pydantic config models defined in model.py."""
+
 import json
 from pathlib import Path
-
-import pytest
 from unittest.mock import patch
 
-from model import CeleryTask, CelerySettings, CeleryAppConfig, JobConfig, JobTypeConfig, get_job_config
+from model import CeleryAppConfig, CelerySettings, CeleryTask, JobConfig, JobTypeConfig, get_job_config
 
 
 def test_celery_task_creation() -> None:
@@ -19,7 +18,7 @@ def test_celery_task_creation() -> None:
         hour=2,
         minute=0,
         timezone="Europe/Warsaw",
-        name="geo_e2e_USGS_Earthquake"
+        name="geo_e2e_USGS_Earthquake",
     )
 
     # Assert
@@ -34,15 +33,7 @@ def test_celery_task_int_fields() -> None:
     """CeleryTask accepts int month/day/hour/minute values."""
     # Arrange
     # Act
-    task = CeleryTask(
-        source_name="Test",
-        month=1,
-        day=15,
-        hour=10,
-        minute=30,
-        timezone="UTC",
-        name="test_task"
-    )
+    task = CeleryTask(source_name="Test", month=1, day=15, hour=10, minute=30, timezone="UTC", name="test_task")
 
     # Assert
     assert task.month == 1
@@ -92,10 +83,7 @@ def test_job_type_config_creation() -> None:
     """JobTypeConfig defaults conda_env to None when it is not configured."""
     # Arrange
     # Act
-    config = JobTypeConfig(
-        folder_name="GEO_Download",
-        python_script="run_download.py"
-    )
+    config = JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py")
 
     # Assert
     assert config.folder_name == "GEO_Download"
@@ -106,10 +94,7 @@ def test_job_type_config_creation() -> None:
 def test_job_type_config_get_command_pattern_string_without_conda_env() -> None:
     """Without conda_env the command runs the bare python script."""
     # Arrange
-    config = JobTypeConfig(
-        folder_name="GEO_Download",
-        python_script="run_download.py"
-    )
+    config = JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py")
 
     # Act
     result = config.get_command_pattern_string()
@@ -121,11 +106,7 @@ def test_job_type_config_get_command_pattern_string_without_conda_env() -> None:
 def test_job_type_config_get_command_pattern_string_with_conda_env() -> None:
     """With conda_env the command is wrapped in conda run."""
     # Arrange
-    config = JobTypeConfig(
-        folder_name="GEO_ETL",
-        python_script="run_etl.py",
-        conda_env="geo_etl_311"
-    )
+    config = JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311")
 
     # Act
     result = config.get_command_pattern_string()
@@ -137,17 +118,15 @@ def test_job_type_config_get_command_pattern_string_with_conda_env() -> None:
 def test_job_type_config_get_command_string() -> None:
     """get_command_string() appends the given arguments to the pattern."""
     # Arrange
-    config = JobTypeConfig(
-        folder_name="GEO_ETL",
-        python_script="run_etl.py",
-        conda_env="geo_etl_311"
-    )
+    config = JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311")
 
     # Act
     result = config.get_command_string("INGESTION", "nifc_fire")
 
     # Assert
-    assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
+    assert result == (
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
+    )
 
 
 def test_job_config_creation() -> None:
@@ -156,7 +135,7 @@ def test_job_config_creation() -> None:
     # Act
     config = JobConfig(
         download=JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py"),
-        ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311")
+        ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
     )
 
     # Assert
@@ -170,14 +149,7 @@ def test_job_config_creation() -> None:
 def test_celery_app_config_get_rabbitmq_broker_string() -> None:
     """The broker URL is built from user, password, host and port."""
     # Arrange
-    config = CeleryAppConfig(
-        name="test_app",
-        username="guest",
-        password="guest",
-        host="localhost",
-        port=5672,
-        tasks=[]
-    )
+    config = CeleryAppConfig(name="test_app", username="guest", password="guest", host="localhost", port=5672, tasks=[])
 
     # Act
     result = config.get_rabbitmq_broker_string()
@@ -190,20 +162,24 @@ def test_get_job_config(tmp_path: Path) -> None:
     """get_job_config() reads the `job` block of config.json."""
     # Arrange
     config_file = tmp_path / "config.json"
-    config_file.write_text(json.dumps({
-        "job": {
-            "download": {
-                "folder_name": "TestFolder",
-                "python_script": "test_script.py",
-                "conda_env": "test_download_env"
-            },
-            "ingestion": {
-                "folder_name": "TestEtlFolder",
-                "python_script": "test_etl_script.py",
-                "conda_env": "test_env"
+    config_file.write_text(
+        json.dumps(
+            {
+                "job": {
+                    "download": {
+                        "folder_name": "TestFolder",
+                        "python_script": "test_script.py",
+                        "conda_env": "test_download_env",
+                    },
+                    "ingestion": {
+                        "folder_name": "TestEtlFolder",
+                        "python_script": "test_etl_script.py",
+                        "conda_env": "test_env",
+                    },
+                }
             }
-        }
-    }))
+        )
+    )
 
     # Act
     with patch("model._CONFIG_PATH", str(config_file)):
@@ -222,34 +198,38 @@ def test_celery_app_config_from_config(tmp_path: Path) -> None:
     """from_config() parses the whole `celery_app` block, including celery_settings."""
     # Arrange
     config_file = tmp_path / "config.json"
-    config_file.write_text(json.dumps({
-        "celery_app": {
-            "name": "test_app",
-            "username": "user",
-            "password": "pass",
-            "host": "127.0.0.1",
-            "port": 5672,
-            "celery_settings": {
-                "task_time_limit": 300,
-                "task_soft_time_limit": 240,
-                "worker_max_tasks_per_child": 10,
-                "worker_max_memory_per_child": 200000,
-                "worker_prefetch_multiplier": 2,
-                "task_acks_late": False,
-            },
-            "tasks": [
-                {
-                    "source_name": "TestSource",
-                    "month": "*",
-                    "day": "*",
-                    "hour": 3,
-                    "minute": 15,
-                    "timezone": "UTC",
-                    "name": "geo_e2e_TestSource"
+    config_file.write_text(
+        json.dumps(
+            {
+                "celery_app": {
+                    "name": "test_app",
+                    "username": "user",
+                    "password": "pass",
+                    "host": "127.0.0.1",
+                    "port": 5672,
+                    "celery_settings": {
+                        "task_time_limit": 300,
+                        "task_soft_time_limit": 240,
+                        "worker_max_tasks_per_child": 10,
+                        "worker_max_memory_per_child": 200000,
+                        "worker_prefetch_multiplier": 2,
+                        "task_acks_late": False,
+                    },
+                    "tasks": [
+                        {
+                            "source_name": "TestSource",
+                            "month": "*",
+                            "day": "*",
+                            "hour": 3,
+                            "minute": 15,
+                            "timezone": "UTC",
+                            "name": "geo_e2e_TestSource",
+                        }
+                    ],
                 }
-            ]
-        }
-    }))
+            }
+        )
+    )
 
     # Act
     with patch("model._CONFIG_PATH", str(config_file)):

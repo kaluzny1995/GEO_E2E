@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 .env
 /logs/
+.tox/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
 celerybeat-schedule.bak
 celerybeat-schedule.dat
 celerybeat-schedule.dir
