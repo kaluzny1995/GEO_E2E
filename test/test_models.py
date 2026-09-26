@@ -1,11 +1,15 @@
+"""Unit tests for the pydantic config models defined in model.py."""
 import json
+from pathlib import Path
+
 import pytest
 from unittest.mock import patch
 
 from model import CeleryTask, CelerySettings, CeleryAppConfig, JobConfig, JobTypeConfig, get_job_config
 
 
-def test_celery_task_creation():
+def test_celery_task_creation() -> None:
+    """CeleryTask keeps the configured string and int schedule fields."""
     # Arrange
     # Act
     task = CeleryTask(
@@ -26,7 +30,8 @@ def test_celery_task_creation():
     assert task.name == "geo_e2e_USGS_Earthquake"
 
 
-def test_celery_task_int_fields():
+def test_celery_task_int_fields() -> None:
+    """CeleryTask accepts int month/day/hour/minute values."""
     # Arrange
     # Act
     task = CeleryTask(
@@ -46,7 +51,8 @@ def test_celery_task_int_fields():
     assert task.minute == 30
 
 
-def test_celery_settings_defaults():
+def test_celery_settings_defaults() -> None:
+    """CelerySettings falls back to its documented defaults."""
     # Arrange
     # Act
     settings = CelerySettings()
@@ -60,7 +66,8 @@ def test_celery_settings_defaults():
     assert settings.task_acks_late is True
 
 
-def test_celery_settings_custom():
+def test_celery_settings_custom() -> None:
+    """CelerySettings overrides every default from explicit values."""
     # Arrange
     # Act
     settings = CelerySettings(
@@ -81,7 +88,8 @@ def test_celery_settings_custom():
     assert settings.task_acks_late is False
 
 
-def test_job_type_config_creation():
+def test_job_type_config_creation() -> None:
+    """JobTypeConfig defaults conda_env to None when it is not configured."""
     # Arrange
     # Act
     config = JobTypeConfig(
@@ -95,7 +103,8 @@ def test_job_type_config_creation():
     assert config.conda_env is None
 
 
-def test_job_type_config_get_command_pattern_string_without_conda_env():
+def test_job_type_config_get_command_pattern_string_without_conda_env() -> None:
+    """Without conda_env the command runs the bare python script."""
     # Arrange
     config = JobTypeConfig(
         folder_name="GEO_Download",
@@ -109,7 +118,8 @@ def test_job_type_config_get_command_pattern_string_without_conda_env():
     assert result == "cd ..;cd GEO_Download;python run_download.py"
 
 
-def test_job_type_config_get_command_pattern_string_with_conda_env():
+def test_job_type_config_get_command_pattern_string_with_conda_env() -> None:
+    """With conda_env the command is wrapped in conda run."""
     # Arrange
     config = JobTypeConfig(
         folder_name="GEO_ETL",
@@ -124,7 +134,8 @@ def test_job_type_config_get_command_pattern_string_with_conda_env():
     assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py"
 
 
-def test_job_type_config_get_command_string():
+def test_job_type_config_get_command_string() -> None:
+    """get_command_string() appends the given arguments to the pattern."""
     # Arrange
     config = JobTypeConfig(
         folder_name="GEO_ETL",
@@ -139,7 +150,8 @@ def test_job_type_config_get_command_string():
     assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
 
 
-def test_job_config_creation():
+def test_job_config_creation() -> None:
+    """JobConfig exposes the download and ingestion command templates."""
     # Arrange
     # Act
     config = JobConfig(
@@ -155,7 +167,8 @@ def test_job_config_creation():
     assert config.ingestion.conda_env == "geo_etl_311"
 
 
-def test_celery_app_config_get_rabbitmq_broker_string():
+def test_celery_app_config_get_rabbitmq_broker_string() -> None:
+    """The broker URL is built from user, password, host and port."""
     # Arrange
     config = CeleryAppConfig(
         name="test_app",
@@ -173,7 +186,8 @@ def test_celery_app_config_get_rabbitmq_broker_string():
     assert result == "amqp://guest:guest@localhost:5672//"
 
 
-def test_get_job_config(tmp_path):
+def test_get_job_config(tmp_path: Path) -> None:
+    """get_job_config() reads the `job` block of config.json."""
     # Arrange
     config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({
@@ -204,7 +218,8 @@ def test_get_job_config(tmp_path):
     assert result.ingestion.conda_env == "test_env"
 
 
-def test_celery_app_config_from_config(tmp_path):
+def test_celery_app_config_from_config(tmp_path: Path) -> None:
+    """from_config() parses the whole `celery_app` block, including celery_settings."""
     # Arrange
     config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({

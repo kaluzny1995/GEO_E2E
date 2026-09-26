@@ -1,13 +1,17 @@
+"""Unit tests for the helper functions defined in util.py."""
 import os
 import logging
-import pytest
 import datetime as dt
+from pathlib import Path
+
+import pytest
 from unittest.mock import patch, MagicMock
 
 import util
 
 
-def test_to_utc_warsaw():
+def test_to_utc_warsaw() -> None:
+    """A local hour converts to UTC using the Warsaw offset (CEST = UTC+2)."""
     # Arrange
     # Act
     result = util.to_utc(10, "Europe/Warsaw")
@@ -16,7 +20,8 @@ def test_to_utc_warsaw():
     assert result == 8  # CEST (summer) = UTC+2
 
 
-def test_to_utc_warsaw_midnight():
+def test_to_utc_warsaw_midnight() -> None:
+    """Midnight local time maps to 22:00 UTC."""
     # Arrange
     # Act
     result = util.to_utc(0, "Europe/Warsaw")
@@ -31,7 +36,8 @@ def test_to_utc_warsaw_midnight():
     (12, "US/Eastern", 16),     # EDT (summer) = UTC-4
     (0, "Asia/Tokyo", 15),      # JST = UTC+9 (no DST)
 ])
-def test_to_utc_parametrized(hour, timezone, expected):
+def test_to_utc_parametrized(hour: int, timezone: str, expected: int) -> None:
+    """to_utc() is correct across different time zones."""
     # Arrange
     # Act
     result = util.to_utc(hour, timezone)
@@ -40,7 +46,8 @@ def test_to_utc_parametrized(hour, timezone, expected):
     assert result == expected
 
 
-def test_celerybeat_cleanup_removes_files(tmp_path):
+def test_celerybeat_cleanup_removes_files(tmp_path: Path) -> None:
+    """Every celerybeat-schedule* file is removed from the current directory."""
     # Arrange
     (tmp_path / "celerybeat-schedule.bak").touch()
     (tmp_path / "celerybeat-schedule.dat").touch()
@@ -60,7 +67,8 @@ def test_celerybeat_cleanup_removes_files(tmp_path):
         os.chdir(original_cwd)
 
 
-def test_celerybeat_cleanup_no_files(tmp_path):
+def test_celerybeat_cleanup_no_files(tmp_path: Path) -> None:
+    """Cleanup is a no-op when no schedule files exist."""
     # Arrange
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -71,7 +79,8 @@ def test_celerybeat_cleanup_no_files(tmp_path):
         os.chdir(original_cwd)
 
 
-def test_setup_logger_creates_log_file(tmp_path):
+def test_setup_logger_creates_log_file(tmp_path: Path) -> None:
+    """setup_logger() creates the log file and returns an INFO logger."""
     # Arrange
     log_file = str(tmp_path / "logs" / "test.log")
 
@@ -84,7 +93,8 @@ def test_setup_logger_creates_log_file(tmp_path):
     assert logger.level == 20  # logging.INFO
 
 
-def test_setup_logger_creates_nested_directory(tmp_path):
+def test_setup_logger_creates_nested_directory(tmp_path: Path) -> None:
+    """Missing parent directories of the log file are created."""
     # Arrange
     log_file = str(tmp_path / "a" / "b" / "c" / "test.log")
 
@@ -95,7 +105,8 @@ def test_setup_logger_creates_nested_directory(tmp_path):
     assert os.path.exists(log_file)
 
 
-def test_get_memory_info():
+def test_get_memory_info() -> None:
+    """get_memory_info() returns sane (used, total, percent) values."""
     # Arrange
     # Act
     used_gb, total_gb, percent = util.get_memory_info()
@@ -107,7 +118,8 @@ def test_get_memory_info():
     assert 0 <= percent <= 100
 
 
-def test_get_memory_info_returns_floats():
+def test_get_memory_info_returns_floats() -> None:
+    """Every value returned by get_memory_info() is a float."""
     # Arrange
     # Act
     used_gb, total_gb, percent = util.get_memory_info()
@@ -119,7 +131,8 @@ def test_get_memory_info_returns_floats():
 
 
 @patch("util.psutil.virtual_memory")
-def test_get_memory_info_mocked(mock_vmem):
+def test_get_memory_info_mocked(mock_vmem: MagicMock) -> None:
+    """Values are read from psutil.virtual_memory()."""
     # Arrange
     mock_vmem.return_value = MagicMock(used=8 * 1024 ** 3, total=16 * 1024 ** 3, percent=50.0)
 
@@ -133,7 +146,8 @@ def test_get_memory_info_mocked(mock_vmem):
 
 
 @patch("util.get_memory_info")
-def test_log_memory_usage(mock_get_memory, tmp_path):
+def test_log_memory_usage(mock_get_memory: MagicMock, tmp_path: Path) -> None:
+    """Memory usage is written to the log file in the expected format."""
     # Arrange
     mock_get_memory.return_value = (3.21, 15.54, 20.66)
     log_file = str(tmp_path / "test.log")
@@ -149,7 +163,8 @@ def test_log_memory_usage(mock_get_memory, tmp_path):
 
 
 @patch("util.get_memory_info")
-def test_log_memory_usage_subprocess_label(mock_get_memory, tmp_path):
+def test_log_memory_usage_subprocess_label(mock_get_memory: MagicMock, tmp_path: Path) -> None:
+    """The label appears in the logged line (e.g. 'Subprocess Memory: ...')."""
     # Arrange
     mock_get_memory.return_value = (1.50, 8.00, 18.75)
     log_file = str(tmp_path / "test2.log")

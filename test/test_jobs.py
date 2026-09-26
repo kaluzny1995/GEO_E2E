@@ -1,7 +1,9 @@
+"""Tests for Job chains: loading from jobs.json, command building and recursive execution."""
 import io
 import json
 import logging
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -11,27 +13,32 @@ from model import EJobType, Job
 class CommandRunner:
     """ Fake for model.run_command — records commands and returns queued return codes. """
 
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install this fake as model.run_command and prepare the call/result queues."""
         self.calls = []
         self.results = []
         monkeypatch.setattr("model.run_command", self._run)
 
     @property
-    def commands(self):
+    def commands(self) -> list[str]:
+        """Commands recorded so far (without their log files)."""
         return [command for command, _ in self.calls]
 
-    def _run(self, command, log_file):
+    def _run(self, command: str, log_file: str) -> int:
+        """Record the call and pop the next queued return code (0 when none left)."""
         self.calls.append((command, log_file))
         return self.results.pop(0) if self.results else 0
 
 
 @pytest.fixture()
-def runner(monkeypatch):
+def runner(monkeypatch: pytest.MonkeyPatch) -> CommandRunner:
+    """CommandRunner installed as model.run_command."""
     return CommandRunner(monkeypatch)
 
 
 @pytest.fixture()
-def logger():
+def logger() -> tuple[logging.Logger, io.StringIO]:
+    """Logger writing to an in-memory stream, returned as (logger, stream)."""
     log = logging.getLogger("test_jobs")
     log.handlers.clear()
     log.propagate = False
@@ -42,7 +49,7 @@ def logger():
 
 
 @pytest.fixture()
-def jobs_path(tmp_path, monkeypatch):
+def jobs_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """ Point Job.from_config() at a temporary jobs.json """
     path = tmp_path / "jobs.json"
     monkeypatch.setattr("model._JOBS_PATH", str(path))
@@ -50,6 +57,7 @@ def jobs_path(tmp_path, monkeypatch):
 
 
 def _chain() -> dict:
+    """A minimal DOWNLOAD -> INGESTION chain for NIFC, ready for json.dumps()."""
     return {
         "NIFC": {
             "source_name": "NIFC",
@@ -68,7 +76,8 @@ def _chain() -> dict:
     }
 
 
-def test_job_from_config_returns_chain_root(jobs_path):
+def test_job_from_config_returns_chain_root(jobs_path: Path) -> None:
+    """Job.from_config() rebuilds the whole chain starting at the root DOWNLOAD job."""
     # Arrange
     jobs_path.write_text(json.dumps(_chain()))
 
@@ -84,7 +93,8 @@ def test_job_from_config_returns_chain_root(jobs_path):
     assert job.next_jobs[0].next_jobs == []
 
 
-def test_job_from_config_unknown_source(jobs_path):
+def test_job_from_config_unknown_source(jobs_path: Path) -> None:
+    """Job.from_config() raises KeyError for a source missing from jobs.json."""
     # Arrange
     jobs_path.write_text(json.dumps(_chain()))
 
@@ -93,7 +103,8 @@ def test_job_from_config_unknown_source(jobs_path):
         Job.from_config("UNKNOWN")
 
 
-def test_job_get_command_download():
+def test_job_get_command_download() -> None:
+    """A DOWNLOAD job builds the run_download.py command with the source name."""
     # Arrange
     job = Job(source_name="NIFC", job_type=EJobType.DOWNLOAD)
 
@@ -104,7 +115,8 @@ def test_job_get_command_download():
     assert result == "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
 
 
-def test_job_get_command_ingestion():
+def test_job_get_command_ingestion() -> None:
+    """An INGESTION job builds the run_etl.py command with the table name."""
     # Arrange
     job = Job(source_name="NIFC", job_type=EJobType.INGESTION, table_name="nifc_fire")
 
@@ -115,7 +127,8 @@ def test_job_get_command_ingestion():
     assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
 
 
-def test_job_get_command_ingestion_without_table_name_raises():
+def test_job_get_command_ingestion_without_table_name_raises() -> None:
+    """An INGESTION job without table_name raises ValueError."""
     # Arrange
     job = Job(source_name="NIFC", job_type=EJobType.INGESTION)
 
@@ -124,7 +137,8 @@ def test_job_get_command_ingestion_without_table_name_raises():
         job.get_command()
 
 
-def test_run_executes_next_jobs_after_success(runner, logger):
+def test_run_executes_next_jobs_after_success(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+    """After a successful job the chained job runs with the same log file."""
     # Arrange
     job = Job(
         source_name="NIFC",
@@ -145,7 +159,8 @@ def test_run_executes_next_jobs_after_success(runner, logger):
     assert {log_file for _, log_file in runner.calls} == {"logs/NIFC/test.log"}
 
 
-def test_run_stops_chain_when_job_fails(runner, logger):
+def test_run_stops_chain_when_job_fails(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+    """A non-zero return code stops the chain and logs that next jobs will not run."""
     # Arrange
     job = Job(
         source_name="NIFC",
@@ -165,7 +180,8 @@ def test_run_stops_chain_when_job_fails(runner, logger):
     assert "next jobs will not be executed" in stream.getvalue()
 
 
-def test_run_does_not_raise_when_is_failed_if_error_is_false(runner, logger):
+def test_run_does_not_raise_when_is_failed_if_error_is_false(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+    """With is_failed_if_error=false a failing job only logs a warning."""
     # Arrange
     job = Job(
         source_name="NIFC",
@@ -183,7 +199,8 @@ def test_run_does_not_raise_when_is_failed_if_error_is_false(runner, logger):
     assert len(runner.commands) == 1
 
 
-def test_run_raises_when_is_failed_if_error_is_true(runner, logger):
+def test_run_raises_when_is_failed_if_error_is_true(runner: CommandRunner, logger: tuple[logging.Logger, io.StringIO]) -> None:
+    """With is_failed_if_error=true a failing job raises CalledProcessError."""
     # Arrange
     job = Job(
         source_name="NIFC",

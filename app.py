@@ -1,3 +1,4 @@
+""" Celery application: beat schedule built from config.json and the `geo_e2e` E2E chain task. """
 import logging
 import datetime as dt
 
