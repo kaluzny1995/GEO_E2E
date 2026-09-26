@@ -51,19 +51,22 @@ flowchart TD
 | Memory Monitor   | psutil >= 5.9.0                             |
 | Testing          | pytest >= 7.0.0                             |
 | Environment      | Conda                                       |
+| Cluster          | Docker Compose (RabbitMQ + Spark 3.5.5)     |
 
 ## Project Structure
 
 ```
 GEO_E2E/
-├── app.py              # Celery app definition, beat schedule, geo_download task
-├── config.json         # Celery config (broker, tasks) and job config (target script)
-├── model.py            # Pydantic models: CeleryAppConfig, CeleryTask, JobConfig
-├── util.py             # Logger setup, timezone conversion, beat cleanup
-├── environment.yml     # Conda environment definition
-├── logs/               # Timestamped log files per source
+├── docker-compose.yaml   # RabbitMQ + Spark cluster services
+├── .env                  # Machine-specific paths (not in git)
+├── app.py                # Celery app definition, beat schedule, geo_download task
+├── config.json           # Celery config (broker, tasks) and job config (target script)
+├── model.py              # Pydantic models: CeleryAppConfig, CeleryTask, JobConfig
+├── util.py               # Logger setup, timezone conversion, beat cleanup
+├── environment.yml       # Conda environment definition
+├── logs/                 # Timestamped log files per source
 │   └── USGS_Earthquake/
-└── test/               # Unit tests
+└── test/                 # Unit tests
     ├── __init__.py
     ├── test_models.py
     └── test_util.py
@@ -72,8 +75,9 @@ GEO_E2E/
 ## Prerequisites
 
 - **Conda** — for environment management
-- **RabbitMQ** — running locally on port 5672 (default) or configured in `config.json`
-- **GEO_Download** — must be a sibling directory to GEO_E2E (i.e. `../GEO_Download/`)
+- **RabbitMQ** — running locally on port 5672 (default) or via Docker Compose
+- **Docker** — for running RabbitMQ and the Spark cluster (optional but recommended)
+- **GEO_Download** — must be a sibling directory (i.e. `../GEO_Download/`)
 
 ## Setup
 
@@ -83,31 +87,62 @@ GEO_E2E/
 conda env create -f environment.yml
 ```
 
-### 2. Start RabbitMQ
+### 2. Configure environment variables
 
-```bash
-# macOS (Homebrew)
-brew services start rabbitmq
+Copy or edit the `.env` file in this directory. It defines the path to the data folder shared between Docker containers:
 
-# Linux (systemd)
-sudo systemctl start rabbitmq-server
-
-# Docker
-docker run -d --name rabbitmq -p 5672:5672 rabbitmq:3
+```
+GEO_DATA_DIR=/absolute/path/to/GEO_Download/data
 ```
 
-### 3. Verify directory structure
+> **Important:** The `.env` file contains machine-specific paths and is excluded from git (listed in `.gitignore`). Each developer must configure it locally.
 
-GEO_E2E expects GEO_Download to be located at `../GEO_Download/`:
+### 3. Start services with Docker Compose
+
+```bash
+docker compose up -d
+```
+
+This starts:
+
+| Service | Container | Ports | Purpose |
+|---------|-----------|-------|---------|
+| RabbitMQ | `geo_rabbitmq` | 5673, 15673 | Message broker for Celery |
+| Spark Master | `geo_spark_master` | 7078, 8083 | Spark cluster master |
+| Spark Worker 1 | `geo_spark_worker_1` | 8084 | Spark worker (2 cores, 2g RAM) |
+| Spark Worker 2 | `geo_spark_worker_2` | 8085 | Spark worker (2 cores, 2g RAM) |
+
+**Spark Web UI:** http://localhost:8083
+**RabbitMQ Management UI:** http://localhost:15673 (user: `geo_mq_admin`, pass: `geo_mq_admin`)
+
+### 4. Verify directory structure
+
+All three projects must be siblings under the same parent directory (`GeographicData/`). Both GEO_E2E and GEO_ETL expect GEO_Download to be located at `../GEO_Download/`:
 
 ```
 GeographicData/
-├── GEO_Download/       # Data downloader (sibling)
+├── GEO_Download/           # Data downloader
 │   ├── run_download.py
+│   ├── config.json
+│   ├── downloader/
+│   ├── model/
+│   ├── data/               # Downloaded CSV files
 │   └── ...
-└── GEO_E2E/            # This project (orchestrator)
-    ├── app.py
-    └── ...
+├── GEO_E2E/                # This project (orchestrator + Docker Compose)
+│   ├── docker-compose.yaml
+│   ├── .env                # Machine-specific paths (not in git)
+│   ├── app.py
+│   ├── config.json
+│   ├── model.py
+│   ├── util.py
+│   ├── environment.yml
+│   └── ...
+└── GEO_ETL/                # PySpark ETL cluster
+    ├── environment.yml
+    ├── run_pyspark_csv_test.py
+    └── spark/
+        ├── Dockerfile
+        └── jars/
 ```
 
 ## Configuration
@@ -253,3 +288,4 @@ Tests cover:
 ## Related Projects
 
 - **GEO_Download** — the actual data downloader that GEO_E2E schedules. Handles HTTP requests, CSV parsing, and file storage with historical/incremental modes.
+- **GEO_ETL** — PySpark ETL cluster for transforming the downloaded CSV data. Connects to the Spark cluster via `spark://localhost:7078`.

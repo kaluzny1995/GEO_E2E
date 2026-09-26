@@ -12,7 +12,60 @@ services:
       RABBITMQ_DEFAULT_PASS: geo_mq_admin
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
-    restart: unless-stopped
+    restart: always
+
+  geo_spark_master:
+    build: ../GEO_ETL/spark_cluster_image
+    container_name: geo_spark_master
+    hostname: geo-spark-master
+    ports:
+      - "8083:8083"
+      - "7078:7078"
+    environment:
+      SPARK_MASTER_HOST: geo-spark-master
+      SPARK_MASTER_WEBUI_PORT: "8083"
+      SPARK_MASTER_PORT: "7078"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    networks:
+      - geo_network
+    volumes:
+      - ${GEO_DATA_DIR}:${GEO_DATA_DIR}:ro
+
+  geo_spark_worker_1:
+    build: ../GEO_ETL/spark_cluster_image
+    container_name: geo_spark_worker_1
+    environment:
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_WEBUI_PORT: "8084"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://geo-spark-master:7078
+    depends_on:
+      - geo_spark_master
+    networks:
+      - geo_network
+    volumes:
+      - ${GEO_DATA_DIR}:${GEO_DATA_DIR}:ro
+    restart: always
+
+  geo_spark_worker_2:
+    build: ../GEO_ETL/spark_cluster_image
+    container_name: geo_spark_worker_2
+    environment:
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_WEBUI_PORT: "8085"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://geo-spark-master:7078
+    depends_on:
+      - geo_spark_master
+    networks:
+      - geo_network
+    volumes:
+      - ${GEO_DATA_DIR}:${GEO_DATA_DIR}:ro
+    restart: always
 
 volumes:
   rabbitmq_data:
+
+networks:
+  geo_network:
+    driver: bridge
