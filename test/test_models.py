@@ -130,12 +130,13 @@ def test_job_type_config_get_command_string() -> None:
 
 
 def test_job_config_creation() -> None:
-    """JobConfig exposes the download and ingestion command templates."""
+    """JobConfig exposes the download, ingestion and data_quality command templates."""
     # Arrange
     # Act
     config = JobConfig(
         download=JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py"),
         ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
+        data_quality=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
     )
 
     # Assert
@@ -144,6 +145,9 @@ def test_job_config_creation() -> None:
     assert config.ingestion.folder_name == "GEO_ETL"
     assert config.ingestion.python_script == "run_etl.py"
     assert config.ingestion.conda_env == "geo_etl_311"
+    assert config.data_quality.folder_name == "GEO_ETL"
+    assert config.data_quality.python_script == "run_etl.py"
+    assert config.data_quality.conda_env == "geo_etl_311"
 
 
 def test_celery_app_config_get_rabbitmq_broker_string() -> None:
@@ -176,6 +180,11 @@ def test_get_job_config(tmp_path: Path) -> None:
                         "python_script": "test_etl_script.py",
                         "conda_env": "test_env",
                     },
+                    "data_quality": {
+                        "folder_name": "TestEtlFolder",
+                        "python_script": "test_etl_script.py",
+                        "conda_env": "test_dq_env",
+                    },
                 }
             }
         )
@@ -192,6 +201,9 @@ def test_get_job_config(tmp_path: Path) -> None:
     assert result.ingestion.folder_name == "TestEtlFolder"
     assert result.ingestion.python_script == "test_etl_script.py"
     assert result.ingestion.conda_env == "test_env"
+    assert result.data_quality.folder_name == "TestEtlFolder"
+    assert result.data_quality.python_script == "test_etl_script.py"
+    assert result.data_quality.conda_env == "test_dq_env"
 
 
 def test_celery_app_config_from_config(tmp_path: Path) -> None:

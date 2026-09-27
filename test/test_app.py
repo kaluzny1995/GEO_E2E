@@ -35,6 +35,9 @@ DOWNLOAD_COMMAND = "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_d
 INGESTION_COMMAND = (
     "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
 )
+DATA_QUALITY_COMMAND = (
+    "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY nifc_fire"
+)
 
 
 def test_beat_schedule_task_names(app_module: ModuleType) -> None:
@@ -60,20 +63,20 @@ def test_beat_schedule_task_names(app_module: ModuleType) -> None:
 
 
 def test_geo_e2e_runs_whole_chain(app_module: ModuleType, commands: tuple[list[str], list[int]]) -> None:
-    """A successful DOWNLOAD runs the chained INGESTION command."""
+    """A successful DOWNLOAD runs INGESTION and then the DATA_QUALITY job on the same table."""
     # Arrange
     calls, results = commands
-    results.extend([0, 0])
+    results.extend([0, 0, 0])
 
     # Act
     app_module.geo_e2e("NIFC")
 
     # Assert
-    assert calls == [DOWNLOAD_COMMAND, INGESTION_COMMAND]
+    assert calls == [DOWNLOAD_COMMAND, INGESTION_COMMAND, DATA_QUALITY_COMMAND]
 
 
 def test_geo_e2e_stops_chain_when_download_fails(app_module: ModuleType, commands: tuple[list[str], list[int]]) -> None:
-    """A failing DOWNLOAD stops the chain — INGESTION is never executed."""
+    """A failing DOWNLOAD stops the chain — INGESTION and DATA_QUALITY are never executed."""
     # Arrange
     calls, results = commands
     results.append(1)
@@ -86,7 +89,7 @@ def test_geo_e2e_stops_chain_when_download_fails(app_module: ModuleType, command
 
 
 def test_geo_e2e_completes_when_ingestion_fails(app_module: ModuleType, commands: tuple[list[str], list[int]]) -> None:
-    """With is_failed_if_error=false an INGESTION failure still finishes the task."""
+    """With is_failed_if_error=false an INGESTION failure still finishes the task and skips DATA_QUALITY."""
     # Arrange
     calls, results = commands
     results.extend([0, 1])
@@ -96,3 +99,18 @@ def test_geo_e2e_completes_when_ingestion_fails(app_module: ModuleType, commands
 
     # Assert
     assert calls == [DOWNLOAD_COMMAND, INGESTION_COMMAND]
+
+
+def test_geo_e2e_completes_when_data_quality_fails(
+    app_module: ModuleType, commands: tuple[list[str], list[int]]
+) -> None:
+    """A failing DATA_QUALITY job is the last step — the chain still finishes normally."""
+    # Arrange
+    calls, results = commands
+    results.extend([0, 0, 1])
+
+    # Act
+    app_module.geo_e2e("NIFC")
+
+    # Assert
+    assert calls == [DOWNLOAD_COMMAND, INGESTION_COMMAND, DATA_QUALITY_COMMAND]

@@ -20,6 +20,7 @@ class EJobType(StrEnum):
 
     DOWNLOAD = "DOWNLOAD"
     INGESTION = "INGESTION"
+    DATA_QUALITY = "DATA_QUALITY"
 
 
 class CeleryTask(BaseModel):
@@ -57,10 +58,11 @@ class JobTypeConfig(BaseModel):
 
 
 class JobConfig(BaseModel):
-    """The `job` block of config.json — command templates for DOWNLOAD and INGESTION."""
+    """The `job` block of config.json — command templates for DOWNLOAD, INGESTION and DATA_QUALITY."""
 
     download: JobTypeConfig
     ingestion: JobTypeConfig
+    data_quality: JobTypeConfig
 
     class ConfigDict:
         """Makes the model immutable."""
@@ -120,7 +122,7 @@ class CeleryAppConfig(BaseModel):
 
 
 def get_job_config() -> JobConfig:
-    """Load the `job` block of config.json (DOWNLOAD and INGESTION command templates)."""
+    """Load the `job` block of config.json (DOWNLOAD, INGESTION and DATA_QUALITY command templates)."""
     with open(_CONFIG_PATH) as f:
         return JobConfig(**json.load(f)["job"])
 
@@ -144,7 +146,7 @@ class Job(BaseModel):
         """Build the shell command of this job from the `job` block of config.json.
 
         Raises:
-            ValueError: When an INGESTION job has no table_name configured in jobs.json.
+            ValueError: When an INGESTION or DATA_QUALITY job has no table_name configured in jobs.json.
         """
         job_config = get_job_config()
 
@@ -152,9 +154,14 @@ class Job(BaseModel):
             return job_config.download.get_command_string(self.source_name)
 
         if self.table_name is None:
-            raise ValueError(f'INGESTION job for "{self.source_name}" has no table_name configured in jobs.json')
+            raise ValueError(
+                f'{self.job_type.value} job for "{self.source_name}" has no table_name configured in jobs.json'
+            )
 
-        return job_config.ingestion.get_command_string(self.job_type.value, self.table_name)
+        if self.job_type == EJobType.INGESTION:
+            return job_config.ingestion.get_command_string(self.job_type.value, self.table_name)
+
+        return job_config.data_quality.get_command_string(self.job_type.value, self.table_name)
 
     def run(self, logger: logging.Logger, log_file: str) -> None:
         """Execute this job's command, then its `next_jobs` recursively (only if this job succeeded).

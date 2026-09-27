@@ -16,7 +16,7 @@ Tests cover:
 - **Config loading** — `from_config()` and `get_job_config()` with mock JSON files
 - **Broker string** — RabbitMQ connection string generation
 - **Command pattern** — subprocess command construction (each step runs via `conda run --no-capture-output` in its configured env)
-- **Job chains** — `Job.from_config()` loads `jobs.json`, `Job.run()` executes `next_jobs` recursively, stops on failure and raises only when `is_failed_if_error` is set
+- **Job chains** — `Job.from_config()` loads `jobs.json`, `Job.run()` executes `next_jobs` recursively (DOWNLOAD → INGESTION → DATA_QUALITY), stops on failure and raises only when `is_failed_if_error` is set
 - **Task wiring** — beat schedule entries named `geo_e2e_<source>` calling `app.geo_e2e`, chain execution and failure handling
 - **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
 
@@ -58,7 +58,7 @@ Ruff rules: `line-length = 120`, `target-version = "py311"`; `logs/`, `__pycache
 |---------|-----------|--------|
 | `tox` | default gate = `lint` + `py311` | ✅ |
 | `tox -e lint` | `ruff check --output-format=concise .` | ✅ 0 findings |
-| `tox -e py311` | full pytest suite (40 tests) | ✅ |
+| `tox -e py311` | full pytest suite (45 tests) | ✅ |
 | `tox -e typecheck` | `mypy` (`app.py`, `model.py`, `util.py`) | ✅ 0 errors |
 | `tox -e format` | `ruff format --check .` | ✅ 13 files already formatted |
 | `tox -e warnings` | `pytest -W error::DeprecationWarning` | ✅ |

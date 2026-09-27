@@ -48,6 +48,7 @@ Each chain writes one timestamped file in this project, and each step writes its
 logs/<source>/celery_<source>_<timestamp>.log                        # GEO_E2E — whole chain (step output streamed in)
 ../GEO_Download/logs/<source>/download_<source>_<timestamp>.log      # GEO_Download — DOWNLOAD step
 ../GEO_ETL/logs/ingestion/ingestion_<table>_<timestamp>.log          # GEO_ETL — INGESTION step
+../GEO_ETL/logs/data_quality/data_quality_<table>_<timestamp>.log    # GEO_ETL — DATA_QUALITY step
 ```
 
 ### Example log output
@@ -66,7 +67,11 @@ Excerpt from `logs/NIFC/celery_NIFC_2026-09-26T15:20:45.297507.log` (the subproc
 2026-09-26 15:20:46,736 INFO Executing command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire
 ...
 2026-09-26 15:21:01,652 INFO Finished INGESTION job for "NIFC". Return code: 0.
-2026-09-26 15:21:01,653 INFO Worker Memory: 15.93 out of 62.50 GiB (25.50 %) used
+2026-09-26 15:21:01,653 INFO Starting DATA_QUALITY job for "NIFC".
+2026-09-26 15:21:01,653 INFO Executing command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY nifc_fire
+...
+2026-09-26 15:21:09,410 INFO Finished DATA_QUALITY job for "NIFC". Return code: 0.
+2026-09-26 15:21:09,411 INFO Worker Memory: 15.93 out of 62.50 GiB (25.50 %) used
 ```
 
 A non-zero return code is logged as a warning instead of `Finished ... Return code: 0.`, and the `next_jobs` are skipped:

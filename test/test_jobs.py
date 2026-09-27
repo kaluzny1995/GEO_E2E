@@ -60,7 +60,7 @@ def jobs_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _chain() -> dict:
-    """A minimal DOWNLOAD -> INGESTION chain for NIFC, ready for json.dumps()."""
+    """A minimal DOWNLOAD -> INGESTION -> DATA_QUALITY chain for NIFC, ready for json.dumps()."""
     return {
         "NIFC": {
             "source_name": "NIFC",
@@ -72,7 +72,15 @@ def _chain() -> dict:
                     "job_type": "INGESTION",
                     "table_name": "nifc_fire",
                     "is_failed_if_error": False,
-                    "next_jobs": [],
+                    "next_jobs": [
+                        {
+                            "source_name": "NIFC",
+                            "job_type": "DATA_QUALITY",
+                            "table_name": "nifc_fire",
+                            "is_failed_if_error": False,
+                            "next_jobs": [],
+                        }
+                    ],
                 }
             ],
         }
@@ -93,7 +101,10 @@ def test_job_from_config_returns_chain_root(jobs_path: Path) -> None:
     assert len(job.next_jobs) == 1
     assert job.next_jobs[0].job_type == EJobType.INGESTION
     assert job.next_jobs[0].table_name == "nifc_fire"
-    assert job.next_jobs[0].next_jobs == []
+    assert len(job.next_jobs[0].next_jobs) == 1
+    assert job.next_jobs[0].next_jobs[0].job_type == EJobType.DATA_QUALITY
+    assert job.next_jobs[0].next_jobs[0].table_name == "nifc_fire"
+    assert job.next_jobs[0].next_jobs[0].next_jobs == []
 
 
 def test_job_from_config_unknown_source(jobs_path: Path) -> None:
@@ -104,6 +115,26 @@ def test_job_from_config_unknown_source(jobs_path: Path) -> None:
     # Act & Assert
     with pytest.raises(KeyError):
         Job.from_config("UNKNOWN")
+
+
+def test_jobs_json_chains_data_quality_after_ingestion() -> None:
+    """Every source in jobs.json runs DATA_QUALITY on its table right after a successful INGESTION."""
+    # Arrange
+    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
+        sources = json.load(f)
+
+    # Act & Assert
+    for source_name, raw in sources.items():
+        ingestion = raw["next_jobs"][0]
+
+        assert ingestion["job_type"] == "INGESTION", source_name
+        assert len(ingestion["next_jobs"]) == 1, source_name
+
+        data_quality = ingestion["next_jobs"][0]
+
+        assert data_quality["job_type"] == "DATA_QUALITY", source_name
+        assert data_quality["table_name"] == ingestion["table_name"], source_name
+        assert data_quality["next_jobs"] == [], source_name
 
 
 def test_job_get_command_download() -> None:
@@ -144,16 +175,77 @@ def test_job_get_command_ingestion_without_table_name_raises() -> None:
         job.get_command()
 
 
+def test_job_get_command_data_quality() -> None:
+    """A DATA_QUALITY job builds the run_etl.py command with the plain table name."""
+    # Arrange
+    job = Job(source_name="NIFC", job_type=EJobType.DATA_QUALITY, table_name="nifc_fire")
+
+    # Act
+    result = job.get_command()
+
+    # Assert
+    assert result == (
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY nifc_fire"
+    )
+
+
+def test_job_get_command_data_quality_without_table_name_raises() -> None:
+    """A DATA_QUALITY job without table_name raises ValueError."""
+    # Arrange
+    job = Job(source_name="NIFC", job_type=EJobType.DATA_QUALITY)
+
+    # Act & Assert
+    with pytest.raises(ValueError, match="no table_name"):
+        job.get_command()
+
+
 def test_run_executes_next_jobs_after_success(runner: CommandRunner, logger: LogCapture) -> None:
-    """After a successful job the chained job runs with the same log file."""
+    """After a successful job the chained jobs run in order with the same log file."""
     # Arrange
     job = Job(
         source_name="NIFC",
         job_type=EJobType.DOWNLOAD,
-        next_jobs=[Job(source_name="NIFC", job_type=EJobType.INGESTION, table_name="nifc_fire")],
+        next_jobs=[
+            Job(
+                source_name="NIFC",
+                job_type=EJobType.INGESTION,
+                table_name="nifc_fire",
+                next_jobs=[Job(source_name="NIFC", job_type=EJobType.DATA_QUALITY, table_name="nifc_fire")],
+            )
+        ],
     )
     log, _ = logger
-    runner.results = [0, 0]
+    runner.results = [0, 0, 0]
+
+    # Act
+    job.run(logger=log, log_file="logs/NIFC/test.log")
+
+    # Assert
+    assert runner.commands == [
+        "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC",
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire",
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY nifc_fire",
+    ]
+    assert {log_file for _, log_file in runner.calls} == {"logs/NIFC/test.log"}
+
+
+def test_run_skips_data_quality_when_ingestion_fails(runner: CommandRunner, logger: LogCapture) -> None:
+    """A failing INGESTION stops the chain — the DATA_QUALITY job never runs."""
+    # Arrange
+    job = Job(
+        source_name="NIFC",
+        job_type=EJobType.DOWNLOAD,
+        next_jobs=[
+            Job(
+                source_name="NIFC",
+                job_type=EJobType.INGESTION,
+                table_name="nifc_fire",
+                next_jobs=[Job(source_name="NIFC", job_type=EJobType.DATA_QUALITY, table_name="nifc_fire")],
+            )
+        ],
+    )
+    log, stream = logger
+    runner.results = [0, 1]
 
     # Act
     job.run(logger=log, log_file="logs/NIFC/test.log")
@@ -163,7 +255,7 @@ def test_run_executes_next_jobs_after_success(runner: CommandRunner, logger: Log
         "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC",
         "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire",
     ]
-    assert {log_file for _, log_file in runner.calls} == {"logs/NIFC/test.log"}
+    assert "next jobs will not be executed" in stream.getvalue()
 
 
 def test_run_stops_chain_when_job_fails(runner: CommandRunner, logger: LogCapture) -> None:

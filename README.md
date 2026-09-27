@@ -4,7 +4,7 @@ GIS Data End-to-End Pipeline — a Celery-based task scheduler that orchestrates
 
 ## Overview
 
-GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it schedules and monitors jobs by spawning subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table.
+GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it schedules and monitors jobs by spawning subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, followed by `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`.
 
 Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). A chain is executed recursively inside a single Celery task, and a chain is followed only while the jobs keep succeeding.
 
@@ -18,7 +18,7 @@ RabbitMQ acts as the message broker between them, ensuring tasks are queued reli
 
 - **Cron-like scheduling** — define per-source schedules with month, day, hour, minute, and timezone; tasks are named `geo_e2e_<data_source>`.
 - **Timezone-aware** — schedule times are specified in local timezone (e.g. `Europe/Warsaw`) and converted to UTC automatically.
-- **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so DOWNLOAD is followed by INGESTION in the same Celery task. A failing job stops the chain.
+- **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so DOWNLOAD is followed by INGESTION and then DATA_QUALITY in the same Celery task. A failing job stops the chain.
 - **Subprocess execution** — each step runs as an isolated subprocess, capturing stdout/stderr for logging.
 - **Structured logging** — the whole chain writes to one timestamped log file under `logs/<source>/`.
 - **Memory monitoring** — logs system, worker, and subprocess memory usage (`xxx out of yyy GiB (zzz %) used`) at task start and finish.
@@ -41,6 +41,8 @@ flowchart TD
     H -->|CSV response| I[Parse & Save CSV]
     I -->|next_jobs| K[GEO_ETL/run_etl.py INGESTION table_name]
     K -->|JDBC| L[Supabase]
+    K -->|next_jobs| M[GEO_ETL/run_etl.py DATA_QUALITY table_name]
+    M -->|JDBC| L
     F -->|logging| J[logs/source/celery_*.log]
 ```
 
@@ -77,8 +79,8 @@ flowchart TD
 - **RabbitMQ** — reachable at the `celery_app.port` from `config.json` (`5673` with the bundled Docker Compose, which maps host `5673` → container `5672`)
 - **Docker** — for running RabbitMQ and the Spark cluster (optional but recommended)
 - **GEO_Download** — must be a sibling directory (i.e. `../GEO_Download/`) with the `geo_download_311` conda env created, since downloads run there
-- **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion runs there
-- **Spark cluster** — must be up (`docker compose up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion jobs can connect
+- **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion and data-quality runs happen there
+- **Spark cluster** — must be up (`docker compose up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion and data-quality jobs can connect
 
 ## Setup
 
@@ -96,7 +98,7 @@ For an environment that already exists:
 conda env update -f environment.yml
 ```
 
-The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json`), so create those too if they don't exist yet:
+The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json` — the data-quality step reuses `geo_etl_311`), so create those too if they don't exist yet:
 
 ```bash
 conda env create -f ../GEO_Download/environment.yml   # geo_download_311
