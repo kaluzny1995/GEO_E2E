@@ -43,9 +43,9 @@ GEO_E2E/
 3. `Job.run()` builds the shell command for the current `job_type` from the `job` block of `config.json` — for `DOWNLOAD`: `cd ../GEO_Download; conda run --no-capture-output -n geo_download_311 python run_download.py <source_name>`.
 4. A subprocess executes the command, with output streamed directly to the log file (no in-memory buffering).
 5. Output of the **whole chain** goes to `logs/<source>/celery_<source>_<timestamp>.log`.
-6. If the job exits non-zero, the chain **stops** — `next_jobs` are never executed. With `is_failed_if_error: false` a warning is logged; with `true` a `CalledProcessError` is raised and Celery marks the task as FAILURE.
+6. If the job exits non-zero, its two flags in `jobs.json` decide what happens (checked in this order): `is_failed_if_error: true` → ERROR logged and `CalledProcessError` raised, Celery marks the task FAILURE; otherwise `is_stop_if_error: true` → WARNING logged and `next_jobs` skipped (task still SUCCESS); both `false` → WARNING logged and the chain continues. The shipped `jobs.json` sets `is_failed_if_error: false` + `is_stop_if_error: true` on every job, so a failure is a WARNING, the chain stops and the task still succeeds. A `DOWNLOAD` job raises `RuntimeError` when it saved no CSV files, which ends its subprocess with exit code `1` (see [GEO_Download — Exit codes](../../GEO_Download/docs/architecture.md#exit-codes)), so a lagging upstream feed stops the chain instead of triggering an ingestion of unchanged data.
 7. If the job succeeded, `Job.run()` recursively runs its `next_jobs` — for `DOWNLOAD` that is `INGESTION`: `cd ../GEO_ETL; conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION <table_name>`.
-8. A successful `INGESTION` in turn runs the chained `DATA_QUALITY` job: `cd ../GEO_ETL; conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY <table_name>` — quality metrics are therefore measured only on freshly ingested data. A failed ingestion skips it.
+8. A successful `INGESTION` in turn runs the chained `DATA_QUALITY` job: `cd ../GEO_ETL; conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY <table_name>` — quality metrics are therefore measured only on freshly ingested data. A failed ingestion skips it; `INGESTION` itself exits `1` when there was nothing new to ingest (no file newer than the table's `file_date` — see [GEO_ETL — ETL jobs](../../GEO_ETL/docs/etl-jobs.md#ingestion-job)), so an unchanged source stops the chain here too.
 9. The recursion continues to any depth, so extra steps can be appended to `jobs.json` without touching code.
 10. If a job hangs, it is killed after 30 minutes (`task_time_limit` in `config.json`) — the limit covers the whole chain.
 
@@ -55,10 +55,13 @@ The end-to-end diagram (config → beat → worker → download → ingestion �
 
 ## Failure handling
 
-| Situation | `is_failed_if_error: false` | `is_failed_if_error: true` |
-|-----------|-----------------------------|----------------------------|
-| Job returns non-zero | WARNING logged, chain stops | `CalledProcessError` raised → Celery task FAILURE |
-| Chain stopped | `next_jobs` are never executed | `next_jobs` are never executed |
-| Job exceeds `task_time_limit` | task killed after 30 min (whole chain) | task killed after 30 min (whole chain) |
+| Job returns non-zero with… | Log | Celery task | `next_jobs` |
+|-----------------------------|-----|-------------|-------------|
+| `is_failed_if_error: true` | ERROR (the raise itself stops the chain) | FAILURE | never executed |
+| `is_failed_if_error: false`, `is_stop_if_error: true` | WARNING `… — next jobs will not be executed` | SUCCESS | never executed |
+| both flags `false` | WARNING `… — continuing with next jobs` | SUCCESS | executed |
+| `DOWNLOAD` wrote no CSV files (upstream feed has nothing new) | WARNING `… — next jobs will not be executed` (shipped flags) | SUCCESS | never executed |
+| `INGESTION` found nothing to ingest (table already up to date) | WARNING `… — next jobs will not be executed` (shipped flags) | SUCCESS | `DATA_QUALITY` never executed |
+| Job exceeds `task_time_limit` | task killed after 30 min (covers the whole chain) | killed | never executed |
 
 See [Configuration Reference](configuration.md) for the `jobs.json` field reference.

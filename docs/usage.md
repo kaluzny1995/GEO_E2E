@@ -74,8 +74,10 @@ Excerpt from `logs/NIFC/celery_NIFC_2026-09-26T15:20:45.297507.log` (the subproc
 2026-09-26 15:21:09,411 INFO Worker Memory: 15.93 out of 62.50 GiB (25.50 %) used
 ```
 
-A non-zero return code is logged as a warning instead of `Finished ... Return code: 0.`, and the `next_jobs` are skipped:
+A non-zero return code is logged as a warning instead of `Finished ... Return code: 0.`, and the `next_jobs` are skipped. Every job in the shipped `jobs.json` has `is_failed_if_error: false` **and** `is_stop_if_error: true`, so the Celery task still finishes as SUCCESS:
 
 ```
 2026-09-26 15:03:59,854 WARNING DOWNLOAD job for "NIFC" exited with return code 1 — next jobs will not be executed
 ```
+
+With `is_failed_if_error: true` the same failure logs `ERROR DOWNLOAD job for "NIFC" exited with return code 1` and raises `CalledProcessError`, so the Celery task ends as FAILURE; with both flags `false` the warning reads `WARNING … — continuing with next jobs` and the chain proceeds.

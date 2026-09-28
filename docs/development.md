@@ -16,7 +16,7 @@ Tests cover:
 - **Config loading** — `from_config()` and `get_job_config()` with mock JSON files
 - **Broker string** — RabbitMQ connection string generation
 - **Command pattern** — subprocess command construction (each step runs via `conda run --no-capture-output` in its configured env)
-- **Job chains** — `Job.from_config()` loads `jobs.json`, `Job.run()` executes `next_jobs` recursively (DOWNLOAD → INGESTION → DATA_QUALITY), stops on failure and raises only when `is_failed_if_error` is set
+- **Job chains** — `Job.from_config()` loads `jobs.json`, `Job.run()` executes `next_jobs` recursively (DOWNLOAD → INGESTION → DATA_QUALITY) and applies the two failure flags: `is_failed_if_error` raises `CalledProcessError` (Celery FAILURE), `is_stop_if_error` skips `next_jobs` after a warning, both `false` continues the chain — the shipped config uses `false` + `true`
 - **Task wiring** — beat schedule entries named `geo_e2e_<source>` calling `app.geo_e2e`, chain execution and failure handling
 - **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
 

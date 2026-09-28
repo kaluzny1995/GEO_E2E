@@ -137,6 +137,24 @@ def test_jobs_json_chains_data_quality_after_ingestion() -> None:
         assert data_quality["next_jobs"] == [], source_name
 
 
+def test_jobs_json_every_job_stops_chain_without_failing_task() -> None:
+    """Every job in jobs.json sets is_failed_if_error=false and is_stop_if_error=true,
+    so a failure ends the chain with a warning while the Celery task still succeeds."""
+    # Arrange
+    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
+        sources = json.load(f)
+
+    # Act & Assert
+    for source_name, raw in sources.items():
+        stack = [raw]
+        while stack:
+            job = stack.pop()
+            location = f"{source_name}/{job['job_type']}"
+            assert job["is_failed_if_error"] is False, location
+            assert job["is_stop_if_error"] is True, location
+            stack.extend(job["next_jobs"])
+
+
 def test_job_get_command_download() -> None:
     """A DOWNLOAD job builds the run_download.py command with the source name."""
     # Arrange
@@ -230,7 +248,7 @@ def test_run_executes_next_jobs_after_success(runner: CommandRunner, logger: Log
 
 
 def test_run_skips_data_quality_when_ingestion_fails(runner: CommandRunner, logger: LogCapture) -> None:
-    """A failing INGESTION stops the chain — the DATA_QUALITY job never runs."""
+    """A failing INGESTION with is_stop_if_error=true stops the chain — DATA_QUALITY never runs."""
     # Arrange
     job = Job(
         source_name="NIFC",
@@ -240,6 +258,7 @@ def test_run_skips_data_quality_when_ingestion_fails(runner: CommandRunner, logg
                 source_name="NIFC",
                 job_type=EJobType.INGESTION,
                 table_name="nifc_fire",
+                is_stop_if_error=True,
                 next_jobs=[Job(source_name="NIFC", job_type=EJobType.DATA_QUALITY, table_name="nifc_fire")],
             )
         ],
@@ -258,12 +277,13 @@ def test_run_skips_data_quality_when_ingestion_fails(runner: CommandRunner, logg
     assert "next jobs will not be executed" in stream.getvalue()
 
 
-def test_run_stops_chain_when_job_fails(runner: CommandRunner, logger: LogCapture) -> None:
-    """A non-zero return code stops the chain and logs that next jobs will not run."""
+def test_run_stops_chain_when_is_stop_if_error_is_true(runner: CommandRunner, logger: LogCapture) -> None:
+    """With is_stop_if_error=true a non-zero return code skips next jobs and only warns."""
     # Arrange
     job = Job(
         source_name="NIFC",
         job_type=EJobType.DOWNLOAD,
+        is_stop_if_error=True,
         next_jobs=[Job(source_name="NIFC", job_type=EJobType.INGESTION, table_name="nifc_fire")],
     )
     log, stream = logger
@@ -277,6 +297,28 @@ def test_run_stops_chain_when_job_fails(runner: CommandRunner, logger: LogCaptur
         "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
     ]
     assert "next jobs will not be executed" in stream.getvalue()
+
+
+def test_run_continues_chain_when_failure_is_not_stopping(runner: CommandRunner, logger: LogCapture) -> None:
+    """With both flags false a failing job warns and the next jobs run anyway."""
+    # Arrange
+    job = Job(
+        source_name="NIFC",
+        job_type=EJobType.DOWNLOAD,
+        next_jobs=[Job(source_name="NIFC", job_type=EJobType.INGESTION, table_name="nifc_fire")],
+    )
+    log, stream = logger
+    runner.results = [1, 0]
+
+    # Act
+    job.run(logger=log, log_file="logs/NIFC/test.log")
+
+    # Assert
+    assert runner.commands == [
+        "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC",
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire",
+    ]
+    assert "continuing with next jobs" in stream.getvalue()
 
 
 def test_run_does_not_raise_when_is_failed_if_error_is_false(runner: CommandRunner, logger: LogCapture) -> None:

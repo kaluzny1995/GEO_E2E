@@ -128,13 +128,14 @@ def get_job_config() -> JobConfig:
 
 
 class Job(BaseModel):
-    """A single job in a chain — after it finishes successfully,
-    its `next_jobs` are executed recursively (same as E2EReddit's Job)."""
+    """A single job in a chain — its `next_jobs` are executed recursively (same as E2EReddit's Job),
+    unless the job fails and `is_stop_if_error` / `is_failed_if_error` say otherwise."""
 
     source_name: str
     job_type: EJobType
     table_name: str | None = None
     is_failed_if_error: bool = False
+    is_stop_if_error: bool = False
     next_jobs: list["Job"] = []
 
     class ConfigDict:
@@ -164,10 +165,15 @@ class Job(BaseModel):
         return job_config.data_quality.get_command_string(self.job_type.value, self.table_name)
 
     def run(self, logger: logging.Logger, log_file: str) -> None:
-        """Execute this job's command, then its `next_jobs` recursively (only if this job succeeded).
+        """Execute this job's command, then its `next_jobs` recursively.
 
-        A non-zero return code stops the chain: it is logged as a warning, or raises
-        when `is_failed_if_error` is set.
+        Handling of a non-zero return code, in order of precedence:
+
+        1. `is_failed_if_error` — the error is logged and `CalledProcessError` raised,
+           which fails the Celery task and (by the exception) ends the chain.
+        2. `is_stop_if_error` — a warning is logged and `next_jobs` are skipped; the
+           task still finishes successfully.
+        3. neither — a warning is logged and `next_jobs` run anyway.
 
         Raises:
             subprocess.CalledProcessError: When the command fails and `is_failed_if_error` is true.
@@ -183,10 +189,12 @@ class Job(BaseModel):
             if self.is_failed_if_error:
                 logger.error(message)
                 raise subprocess.CalledProcessError(returncode=returncode, cmd=command)
-            logger.warning(f"{message} — next jobs will not be executed")
-            return
-
-        logger.info(f'Finished {self.job_type.value} job for "{self.source_name}". Return code: {returncode}.')
+            if self.is_stop_if_error:
+                logger.warning(f"{message} — next jobs will not be executed")
+                return
+            logger.warning(f"{message} — continuing with next jobs")
+        else:
+            logger.info(f'Finished {self.job_type.value} job for "{self.source_name}". Return code: {returncode}.')
 
         # run the next jobs
         for next_job in self.next_jobs:

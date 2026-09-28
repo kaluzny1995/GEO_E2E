@@ -6,7 +6,7 @@ GIS Data End-to-End Pipeline — a Celery-based task scheduler that orchestrates
 
 GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it schedules and monitors jobs by spawning subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, followed by `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`.
 
-Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). A chain is executed recursively inside a single Celery task, and a chain is followed only while the jobs keep succeeding.
+Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). A chain is executed recursively inside a single Celery task, and a failed job ends that chain — controlled per job by `is_failed_if_error` (raise → Celery FAILURE) and `is_stop_if_error` (skip `next_jobs`); the shipped config sets `is_failed_if_error: false` + `is_stop_if_error: true` everywhere, so a failure stops the chain with a warning and the task still succeeds.
 
 The system requires two always-on processes:
 1. **Celery Beat** — a scheduler that sends tasks to RabbitMQ at configured cron-like intervals.
@@ -18,7 +18,7 @@ RabbitMQ acts as the message broker between them, ensuring tasks are queued reli
 
 - **Cron-like scheduling** — define per-source schedules with month, day, hour, minute, and timezone; tasks are named `geo_e2e_<data_source>`.
 - **Timezone-aware** — schedule times are specified in local timezone (e.g. `Europe/Warsaw`) and converted to UTC automatically.
-- **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so DOWNLOAD is followed by INGESTION and then DATA_QUALITY in the same Celery task. A failing job stops the chain.
+- **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so DOWNLOAD is followed by INGESTION and then DATA_QUALITY in the same Celery task. A failing job stops the chain with a warning (`is_stop_if_error: true`, `is_failed_if_error: false` → the Celery task still succeeds); with both flags `false` the chain would carry on.
 - **Subprocess execution** — each step runs as an isolated subprocess, capturing stdout/stderr for logging.
 - **Structured logging** — the whole chain writes to one timestamped log file under `logs/<source>/`.
 - **Memory monitoring** — logs system, worker, and subprocess memory usage (`xxx out of yyy GiB (zzz %) used`) at task start and finish.

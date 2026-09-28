@@ -76,7 +76,7 @@ def test_geo_e2e_runs_whole_chain(app_module: ModuleType, commands: tuple[list[s
 
 
 def test_geo_e2e_stops_chain_when_download_fails(app_module: ModuleType, commands: tuple[list[str], list[int]]) -> None:
-    """A failing DOWNLOAD stops the chain — INGESTION and DATA_QUALITY are never executed."""
+    """A failing DOWNLOAD skips INGESTION and DATA_QUALITY while the task still succeeds."""
     # Arrange
     calls, results = commands
     results.append(1)

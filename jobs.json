@@ -3,18 +3,21 @@
     "source_name": "USGS_Earthquake",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "USGS_Earthquake",
         "job_type": "INGESTION",
         "table_name": "usgs_earthquake",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "USGS_Earthquake",
             "job_type": "DATA_QUALITY",
             "table_name": "usgs_earthquake",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -25,18 +28,21 @@
     "source_name": "GDACS",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "GDACS",
         "job_type": "INGESTION",
         "table_name": "gdacs_event",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "GDACS",
             "job_type": "DATA_QUALITY",
             "table_name": "gdacs_event",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -47,18 +53,21 @@
     "source_name": "EONET",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "EONET",
         "job_type": "INGESTION",
         "table_name": "eonet_event",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "EONET",
             "job_type": "DATA_QUALITY",
             "table_name": "eonet_event",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -69,18 +78,21 @@
     "source_name": "OpenMeteo_Flood",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "OpenMeteo_Flood",
         "job_type": "INGESTION",
         "table_name": "openmeteo_flood",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "OpenMeteo_Flood",
             "job_type": "DATA_QUALITY",
             "table_name": "openmeteo_flood",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -91,18 +103,21 @@
     "source_name": "USGS_NWIS",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "USGS_NWIS",
         "job_type": "INGESTION",
         "table_name": "usgs_nwis",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "USGS_NWIS",
             "job_type": "DATA_QUALITY",
             "table_name": "usgs_nwis",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -113,18 +128,21 @@
     "source_name": "Avalanche_ORG",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "Avalanche_ORG",
         "job_type": "INGESTION",
         "table_name": "avalanche_org",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "Avalanche_ORG",
             "job_type": "DATA_QUALITY",
             "table_name": "avalanche_org",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -135,18 +153,21 @@
     "source_name": "IBTrACS",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "IBTrACS",
         "job_type": "INGESTION",
         "table_name": "ibtracs_cyclone",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "IBTrACS",
             "job_type": "DATA_QUALITY",
             "table_name": "ibtracs_cyclone",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -157,18 +178,21 @@
     "source_name": "USGS_Volcano",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "USGS_Volcano",
         "job_type": "INGESTION",
         "table_name": "usgs_volcano",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "USGS_Volcano",
             "job_type": "DATA_QUALITY",
             "table_name": "usgs_volcano",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -179,18 +203,21 @@
     "source_name": "NIFC",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "NIFC",
         "job_type": "INGESTION",
         "table_name": "nifc_fire",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "NIFC",
             "job_type": "DATA_QUALITY",
             "table_name": "nifc_fire",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]

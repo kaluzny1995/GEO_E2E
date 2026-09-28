@@ -114,18 +114,21 @@ The chain for each data source — which jobs run, in what order, and what happe
     "source_name": "NIFC",
     "job_type": "DOWNLOAD",
     "is_failed_if_error": false,
+    "is_stop_if_error": true,
     "next_jobs": [
       {
         "source_name": "NIFC",
         "job_type": "INGESTION",
         "table_name": "nifc_fire",
         "is_failed_if_error": false,
+        "is_stop_if_error": true,
         "next_jobs": [
           {
             "source_name": "NIFC",
             "job_type": "DATA_QUALITY",
             "table_name": "nifc_fire",
             "is_failed_if_error": false,
+            "is_stop_if_error": true,
             "next_jobs": []
           }
         ]
@@ -140,10 +143,11 @@ The chain for each data source — which jobs run, in what order, and what happe
 | `source_name`       | Data source this job belongs to (must match the key and `config.json` task)       |
 | `job_type`          | `DOWNLOAD`, `INGESTION` or `DATA_QUALITY` — selects the matching `job.*` command block |
 | `table_name`        | Required for `INGESTION` and `DATA_QUALITY` — table passed to `run_etl.py <JOB_TYPE> <table>` (plain name; GEO_ETL adds `_raw` itself only for `INGESTION`) |
-| `is_failed_if_error`| `true` → non-zero return code raises `CalledProcessError` (Celery task FAILURE); `false` → warning is logged |
+| `is_failed_if_error`| `true` → non-zero return code raises `CalledProcessError` → Celery task FAILURE (this alone already ends the chain); `false` → no exception |
+| `is_stop_if_error`  | `true` → `next_jobs` are skipped after a non-zero return code (only a warning is logged, the task still succeeds); `false` → `next_jobs` run anyway |
 | `next_jobs`         | Jobs to run **after this job succeeded**, recursively (same list shape, nests to any depth) |
 
-> A non-zero return code **stops the chain** in both cases — `next_jobs` never run after a failed job.
+> Checked in order: `is_failed_if_error` first (raise → task FAILURE, chain ends), then `is_stop_if_error` (warning, chain ends). With **both** flags `false` a failed job only logs a warning (`… — continuing with next jobs`) and the chain proceeds. The shipped `jobs.json` sets `is_failed_if_error: false` + `is_stop_if_error: true` on every job: a failure stops the chain with a warning and the Celery task still finishes as SUCCESS.
 
 ### Data quality step
 
