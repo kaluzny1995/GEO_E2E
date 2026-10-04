@@ -4,7 +4,7 @@ GIS Data End-to-End Pipeline — a Celery-based task scheduler that orchestrates
 
 ## Overview
 
-GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it schedules and monitors jobs by spawning subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, followed by `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`.
+GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it schedules and monitors jobs by spawning subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`, `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
 
 Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). A chain is executed recursively inside a single Celery task, and a failed job ends that chain — controlled per job by `is_failed_if_error` (raise → Celery FAILURE) and `is_stop_if_error` (skip `next_jobs`); the shipped config sets `is_failed_if_error: false` + `is_stop_if_error: true` everywhere, so a failure stops the chain with a warning and the task still succeeds.
 
@@ -18,7 +18,7 @@ RabbitMQ acts as the message broker between them, ensuring tasks are queued reli
 
 - **Cron-like scheduling** — define per-source schedules with month, day, hour, minute, and timezone; tasks are named `geo_e2e_<data_source>`.
 - **Timezone-aware** — schedule times are specified in local timezone (e.g. `Europe/Warsaw`) and converted to UTC automatically.
-- **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so DOWNLOAD is followed by INGESTION and then DATA_QUALITY in the same Celery task. A failing job stops the chain with a warning (`is_stop_if_error: true`, `is_failed_if_error: false` → the Celery task still succeeds); with both flags `false` the chain would carry on.
+- **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so in the same Celery task DOWNLOAD is followed by INGESTION, whose `next_jobs` are the plain-table DATA_QUALITY job and the SINGLE_ETL job (itself ending with DATA_QUALITY on the `_etl` table). A failing job skips the jobs chained below it with a warning (`is_stop_if_error: true`, `is_failed_if_error: false` → the Celery task still succeeds); with both flags `false` the chain would carry on.
 - **Subprocess execution** — each step runs as an isolated subprocess, capturing stdout/stderr for logging.
 - **Structured logging** — the whole chain writes to one timestamped log file under `logs/<source>/`.
 - **Memory monitoring** — logs system, worker, and subprocess memory usage (`xxx out of yyy GiB (zzz %) used`) at task start and finish.
@@ -43,6 +43,10 @@ flowchart TD
     K -->|JDBC| L[Supabase]
     K -->|next_jobs| M[GEO_ETL/run_etl.py DATA_QUALITY table_name]
     M -->|JDBC| L
+    K -->|next_jobs| N[GEO_ETL/run_etl.py SINGLE_ETL table_name_etl]
+    N -->|JDBC| L
+    N -->|next_jobs| O[GEO_ETL/run_etl.py DATA_QUALITY table_name_etl]
+    O -->|JDBC| L
     F -->|logging| J[logs/source/celery_*.log]
 ```
 
@@ -79,8 +83,8 @@ flowchart TD
 - **RabbitMQ** — reachable at the `celery_app.port` from `config.json` (`5673` with the bundled Docker Compose, which maps host `5673` → container `5672`)
 - **Docker** — for running RabbitMQ and the Spark cluster (optional but recommended)
 - **GEO_Download** — must be a sibling directory (i.e. `../GEO_Download/`) with the `geo_download_311` conda env created, since downloads run there
-- **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion and data-quality runs happen there
-- **Spark cluster** — must be up (`docker compose up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion and data-quality jobs can connect
+- **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion, single-ETL and data-quality runs happen there
+- **Spark cluster** — must be up (`docker compose up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion, single-ETL and data-quality jobs can connect
 
 ## Setup
 
@@ -98,7 +102,7 @@ For an environment that already exists:
 conda env update -f environment.yml
 ```
 
-The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json` — the data-quality step reuses `geo_etl_311`), so create those too if they don't exist yet:
+The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json` — the data-quality and single-ETL steps reuse `geo_etl_311`), so create those too if they don't exist yet:
 
 ```bash
 conda env create -f ../GEO_Download/environment.yml   # geo_download_311
@@ -127,8 +131,8 @@ This starts:
 |---------|-----------|-------|---------|
 | RabbitMQ | `geo_rabbitmq` | 5673, 15673 | Message broker for Celery |
 | Spark Master | `geo_spark_master` | 7078, 8083 | Spark cluster master |
-| Spark Worker 1 | `geo_spark_worker_1` | 8084 | Spark worker (2 cores, 2g RAM) |
-| Spark Worker 2 | `geo_spark_worker_2` | 8085 | Spark worker (2 cores, 2g RAM) |
+| Spark Worker 1 | `geo_spark_worker_1` | – | Spark worker (2 cores, 2g RAM); its web UI (`SPARK_WORKER_WEBUI_PORT` 8084) is container-internal only |
+| Spark Worker 2 | `geo_spark_worker_2` | – | Spark worker (2 cores, 2g RAM); its web UI (`SPARK_WORKER_WEBUI_PORT` 8085) is container-internal only |
 
 **Spark Web UI:** http://localhost:8083
 **RabbitMQ Management UI:** http://localhost:15673 (user: `geo_mq_admin`, pass: `geo_mq_admin`)
@@ -160,7 +164,7 @@ GeographicData/
 └── GEO_ETL/                # PySpark ETL cluster
     ├── environment.yml
     ├── run_pyspark_csv_test.py
-    └── spark/
+    └── spark_cluster_image/
         ├── Dockerfile
         └── jars/
 ```

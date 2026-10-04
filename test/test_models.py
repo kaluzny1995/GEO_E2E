@@ -130,13 +130,14 @@ def test_job_type_config_get_command_string() -> None:
 
 
 def test_job_config_creation() -> None:
-    """JobConfig exposes the download, ingestion and data_quality command templates."""
+    """JobConfig exposes the download, ingestion, data_quality and single_etl command templates."""
     # Arrange
     # Act
     config = JobConfig(
         download=JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py"),
         ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         data_quality=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
+        single_etl=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
     )
 
     # Assert
@@ -148,6 +149,9 @@ def test_job_config_creation() -> None:
     assert config.data_quality.folder_name == "GEO_ETL"
     assert config.data_quality.python_script == "run_etl.py"
     assert config.data_quality.conda_env == "geo_etl_311"
+    assert config.single_etl.folder_name == "GEO_ETL"
+    assert config.single_etl.python_script == "run_etl.py"
+    assert config.single_etl.conda_env == "geo_etl_311"
 
 
 def test_celery_app_config_get_rabbitmq_broker_string() -> None:
@@ -185,6 +189,11 @@ def test_get_job_config(tmp_path: Path) -> None:
                         "python_script": "test_etl_script.py",
                         "conda_env": "test_dq_env",
                     },
+                    "single_etl": {
+                        "folder_name": "TestEtlFolder",
+                        "python_script": "test_etl_script.py",
+                        "conda_env": "test_single_etl_env",
+                    },
                 }
             }
         )
@@ -204,6 +213,9 @@ def test_get_job_config(tmp_path: Path) -> None:
     assert result.data_quality.folder_name == "TestEtlFolder"
     assert result.data_quality.python_script == "test_etl_script.py"
     assert result.data_quality.conda_env == "test_dq_env"
+    assert result.single_etl.folder_name == "TestEtlFolder"
+    assert result.single_etl.python_script == "test_etl_script.py"
+    assert result.single_etl.conda_env == "test_single_etl_env"
 
 
 def test_celery_app_config_from_config(tmp_path: Path) -> None:

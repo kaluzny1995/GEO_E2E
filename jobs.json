@@ -19,6 +19,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "USGS_Earthquake",
+            "job_type": "SINGLE_ETL",
+            "table_name": "usgs_earthquake_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "USGS_Earthquake",
+                "job_type": "DATA_QUALITY",
+                "table_name": "usgs_earthquake_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -44,6 +61,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "GDACS",
+            "job_type": "SINGLE_ETL",
+            "table_name": "gdacs_event_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "GDACS",
+                "job_type": "DATA_QUALITY",
+                "table_name": "gdacs_event_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -69,6 +103,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "EONET",
+            "job_type": "SINGLE_ETL",
+            "table_name": "eonet_event_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "EONET",
+                "job_type": "DATA_QUALITY",
+                "table_name": "eonet_event_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -94,6 +145,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "OpenMeteo_Flood",
+            "job_type": "SINGLE_ETL",
+            "table_name": "openmeteo_flood_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "OpenMeteo_Flood",
+                "job_type": "DATA_QUALITY",
+                "table_name": "openmeteo_flood_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -119,6 +187,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "USGS_NWIS",
+            "job_type": "SINGLE_ETL",
+            "table_name": "usgs_nwis_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "USGS_NWIS",
+                "job_type": "DATA_QUALITY",
+                "table_name": "usgs_nwis_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -144,6 +229,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "Avalanche_ORG",
+            "job_type": "SINGLE_ETL",
+            "table_name": "avalanche_org_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "Avalanche_ORG",
+                "job_type": "DATA_QUALITY",
+                "table_name": "avalanche_org_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -169,6 +271,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "IBTrACS",
+            "job_type": "SINGLE_ETL",
+            "table_name": "ibtracs_cyclone_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "IBTrACS",
+                "job_type": "DATA_QUALITY",
+                "table_name": "ibtracs_cyclone_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -194,6 +313,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "USGS_Volcano",
+            "job_type": "SINGLE_ETL",
+            "table_name": "usgs_volcano_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "USGS_Volcano",
+                "job_type": "DATA_QUALITY",
+                "table_name": "usgs_volcano_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -219,6 +355,23 @@
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "NIFC",
+            "job_type": "SINGLE_ETL",
+            "table_name": "nifc_fire_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "NIFC",
+                "job_type": "DATA_QUALITY",
+                "table_name": "nifc_fire_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }

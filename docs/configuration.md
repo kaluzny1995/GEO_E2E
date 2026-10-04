@@ -47,6 +47,11 @@ All settings are in `config.json` (abridged — the `tasks` array holds one entr
       "folder_name": "GEO_ETL",
       "python_script": "run_etl.py",
       "conda_env": "geo_etl_311"
+    },
+    "single_etl": {
+      "folder_name": "GEO_ETL",
+      "python_script": "run_etl.py",
+      "conda_env": "geo_etl_311"
     }
   }
 }
@@ -84,7 +89,7 @@ Nested under `celery_app.celery_settings` (as set in `config.json`; fallback def
 | `month`       | Cron month (`*` = every month, `1`-`12`)                      |
 | `day`         | Cron day of month (`*` = every day, `1`-`31`)                 |
 | `hour`        | Hour of day as an integer `0`-`23` in local timezone (converted to UTC automatically; `*` is not supported) |
-| `minute`      | Minute (`0`-`59`)                                             |
+| `minute`      | Minute — integer `0`-`59` or a crontab expression (e.g. `*/15`), unlike `hour` |
 | `timezone`    | IANA timezone string (e.g. `Europe/Warsaw`, `UTC`)            |
 | `name`        | Unique Celery Beat task name, conventionally `geo_e2e_<source_name>` (e.g. `geo_e2e_NIFC`) |
 
@@ -97,12 +102,13 @@ The `job` block defines **how** each job type is executed (command, folder, cond
 | `download`    | `GEO_Download` | `run_download.py` | `geo_download_311` |
 | `ingestion`   | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
 | `data_quality` | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
+| `single_etl`  | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
 
 | Field           | Description                                                        |
 |-----------------|--------------------------------------------------------------------|
 | `folder_name`   | Name of the sibling project directory                              |
 | `python_script` | Python script to execute (e.g. `run_download.py`)                  |
-| `conda_env`     | Optional. Conda env to run in (`conda run --no-capture-output -n <env>`); each step runs in its own env, so the worker's env does not need PySpark or the downloader's dependencies |
+| `conda_env`     | Optional. Conda env to run in (`conda run --no-capture-output -n <env>`); each sibling project runs in its own env (`GEO_Download` → `geo_download_311`, every `run_etl.py` step → `geo_etl_311`), so the worker's env does not need PySpark or the downloader's dependencies |
 
 ## Job Chains (`jobs.json`)
 
@@ -130,6 +136,23 @@ The chain for each data source — which jobs run, in what order, and what happe
             "is_failed_if_error": false,
             "is_stop_if_error": true,
             "next_jobs": []
+          },
+          {
+            "source_name": "NIFC",
+            "job_type": "SINGLE_ETL",
+            "table_name": "nifc_fire_etl",
+            "is_failed_if_error": false,
+            "is_stop_if_error": true,
+            "next_jobs": [
+              {
+                "source_name": "NIFC",
+                "job_type": "DATA_QUALITY",
+                "table_name": "nifc_fire_etl",
+                "is_failed_if_error": false,
+                "is_stop_if_error": true,
+                "next_jobs": []
+              }
+            ]
           }
         ]
       }
@@ -141,19 +164,23 @@ The chain for each data source — which jobs run, in what order, and what happe
 | Field               | Description                                                                       |
 |---------------------|-----------------------------------------------------------------------------------|
 | `source_name`       | Data source this job belongs to (must match the key and `config.json` task)       |
-| `job_type`          | `DOWNLOAD`, `INGESTION` or `DATA_QUALITY` — selects the matching `job.*` command block |
-| `table_name`        | Required for `INGESTION` and `DATA_QUALITY` — table passed to `run_etl.py <JOB_TYPE> <table>` (plain name; GEO_ETL adds `_raw` itself only for `INGESTION`) |
+| `job_type`          | `DOWNLOAD`, `INGESTION`, `DATA_QUALITY` or `SINGLE_ETL` — selects the matching `job.*` command block |
+| `table_name`        | Required for `INGESTION`, `DATA_QUALITY` and `SINGLE_ETL` — argument passed to `run_etl.py <JOB_TYPE> <table>` (plain table name for `INGESTION`/`DATA_QUALITY`, `<table>_etl` for `SINGLE_ETL`; GEO_ETL adds `_raw` itself only for `INGESTION`) |
 | `is_failed_if_error`| `true` → non-zero return code raises `CalledProcessError` → Celery task FAILURE (this alone already ends the chain); `false` → no exception |
 | `is_stop_if_error`  | `true` → `next_jobs` are skipped after a non-zero return code (only a warning is logged, the task still succeeds); `false` → `next_jobs` run anyway |
 | `next_jobs`         | Jobs to run **after this job succeeded**, recursively (same list shape, nests to any depth) |
 
-> Checked in order: `is_failed_if_error` first (raise → task FAILURE, chain ends), then `is_stop_if_error` (warning, chain ends). With **both** flags `false` a failed job only logs a warning (`… — continuing with next jobs`) and the chain proceeds. The shipped `jobs.json` sets `is_failed_if_error: false` + `is_stop_if_error: true` on every job: a failure stops the chain with a warning and the Celery task still finishes as SUCCESS.
+> Checked in order: `is_failed_if_error` first (raise → task FAILURE, chain ends), then `is_stop_if_error` (warning, chain ends). With **both** flags `false` a failed job only logs a warning (`… — continuing with next jobs`) and the chain proceeds. The shipped `jobs.json` sets `is_failed_if_error: false` + `is_stop_if_error: true` on every job: a failure stops the chain with a warning and the Celery task still finishes as SUCCESS. Skipping is **per job**: only the failed job's own `next_jobs` are skipped, so a failed plain-table `DATA_QUALITY` does not stop its sibling `SINGLE_ETL`.
 
 ### Data quality step
 
-Every table in the mapping below has a `DATA_QUALITY` job chained directly under its `INGESTION` job, so the quality metrics are computed **only after the ingestion for that table finished successfully** — a failed or skipped ingestion means `run_etl.py DATA_QUALITY <table>` never runs (the metrics would otherwise be measured on stale data). Since the job is the last step of the chain, a failure there stops the chain without affecting anything downstream.
+Every table in the mapping below has **two** `DATA_QUALITY` jobs: one chained directly under its `INGESTION` job (measuring the plain table), and one under the `SINGLE_ETL` job (measuring the `<table>_etl` table). The plain-table metrics are therefore computed **only after the ingestion for that table finished successfully** — a failed or skipped ingestion means `run_etl.py DATA_QUALITY <table>` never runs (the metrics would otherwise be measured on stale data), and the etl-table metrics only after the `_etl` table was rebuilt. Since each job is the last step of its branch, a failure there stops that branch without affecting anything downstream.
 
-The job runs in the same conda env, folder and log file as ingestion (see `job.data_quality` in `config.json`), and GEO_ETL picks its load type (`HISTORICAL` / `INCREMENTAL`) from the state of `geo.data_quality` — see [GEO_ETL — Data Quality job](../../GEO_ETL/docs/data-quality.md).
+Both jobs run in the same conda env and folder as ingestion (see `job.data_quality` in `config.json`); they share the single GEO_E2E chain log like every other step, while GEO_ETL additionally writes its own `logs/data_quality/data_quality_<table>_<timestamp>.log` per run (see [Usage — Logs](usage.md#logs)). GEO_ETL picks its load type (`HISTORICAL` / `INCREMENTAL`) from the state of `geo.data_quality` — see [GEO_ETL — Data Quality job](../../GEO_ETL/docs/etl_jobs/data-quality.md).
+
+### Single ETL step
+
+`SINGLE_ETL` is chained under the same `INGESTION` job as the plain-table `DATA_QUALITY` job (its sibling), with `table_name` set to the etl script name `<table>_etl`. It rebuilds `geo.<table>_etl` from the plain table and chains its own `DATA_QUALITY` job on that etl table — see [GEO_ETL — Single ETL job](../../GEO_ETL/docs/etl_jobs/single-etl.md).
 
 ### Source → table mapping
 
@@ -164,6 +191,8 @@ The job runs in the same conda env, folder and log file as ingestion (see `job.d
 | `GDACS` | `gdacs_event` | `USGS_Earthquake` | `usgs_earthquake` |
 | `IBTrACS` | `ibtracs_cyclone` | `USGS_NWIS` | `usgs_nwis` |
 | `USGS_Volcano` | `usgs_volcano` | | |
+
+Each source additionally uses the etl table `<table>_etl` (e.g. `nifc_fire_etl`) for its `SINGLE_ETL` job and the `DATA_QUALITY` job chained under it.
 
 ## Modifying the schedule
 
@@ -185,6 +214,6 @@ Edit `config.json` — change `hour` and `minute` in the task config. The schedu
 ### Adding a new data source
 
 1. Add a task entry to `celery_app.tasks` in `config.json` (`source_name`, schedule, `name`).
-2. Add a chain to `jobs.json` under the same `source_name` — `DOWNLOAD`, a chained `INGESTION` job with its `table_name`, and a `DATA_QUALITY` job chained under the ingestion (same `table_name`).
+2. Add a chain to `jobs.json` under the same `source_name` — `DOWNLOAD`, then a chained `INGESTION` job with its `table_name`, whose `next_jobs` hold a `DATA_QUALITY` job on the same table and a `SINGLE_ETL` job on `<table_name>_etl` (itself chaining a `DATA_QUALITY` job on `<table_name>_etl`).
 3. Make sure the source exists in GEO_Download's `config.json` and that the table exists in GEO_ETL.
 4. Restart the worker and beat.

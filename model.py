@@ -6,7 +6,7 @@ import os
 import subprocess
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from util import run_command
 
@@ -21,6 +21,7 @@ class EJobType(StrEnum):
     DOWNLOAD = "DOWNLOAD"
     INGESTION = "INGESTION"
     DATA_QUALITY = "DATA_QUALITY"
+    SINGLE_ETL = "SINGLE_ETL"
 
 
 class CeleryTask(BaseModel):
@@ -42,10 +43,7 @@ class JobTypeConfig(BaseModel):
     python_script: str
     conda_env: str | None = None
 
-    class ConfigDict:
-        """Makes the model immutable."""
-
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
     def get_command_pattern_string(self) -> str:
         """Build the command without arguments, e.g. `cd ..;cd GEO_ETL;conda run ... python run_etl.py`."""
@@ -58,16 +56,14 @@ class JobTypeConfig(BaseModel):
 
 
 class JobConfig(BaseModel):
-    """The `job` block of config.json — command templates for DOWNLOAD, INGESTION and DATA_QUALITY."""
+    """The `job` block of config.json — command templates for DOWNLOAD, INGESTION, DATA_QUALITY and SINGLE_ETL."""
 
     download: JobTypeConfig
     ingestion: JobTypeConfig
     data_quality: JobTypeConfig
+    single_etl: JobTypeConfig
 
-    class ConfigDict:
-        """Makes the model immutable."""
-
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class CelerySettings(BaseModel):
@@ -86,10 +82,7 @@ class CelerySettings(BaseModel):
     # Requeue tasks if the worker crashes mid-download
     task_acks_late: bool = True
 
-    class ConfigDict:
-        """Makes the model immutable."""
-
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class CeleryAppConfig(BaseModel):
@@ -103,10 +96,7 @@ class CeleryAppConfig(BaseModel):
     tasks: list[CeleryTask]
     celery_settings: CelerySettings = CelerySettings()
 
-    class ConfigDict:
-        """Makes the model immutable."""
-
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
     @staticmethod
     def from_config() -> "CeleryAppConfig":
@@ -122,7 +112,7 @@ class CeleryAppConfig(BaseModel):
 
 
 def get_job_config() -> JobConfig:
-    """Load the `job` block of config.json (DOWNLOAD, INGESTION and DATA_QUALITY command templates)."""
+    """Load the `job` block of config.json (DOWNLOAD, INGESTION, DATA_QUALITY and SINGLE_ETL command templates)."""
     with open(_CONFIG_PATH) as f:
         return JobConfig(**json.load(f)["job"])
 
@@ -138,16 +128,14 @@ class Job(BaseModel):
     is_stop_if_error: bool = False
     next_jobs: list["Job"] = []
 
-    class ConfigDict:
-        """Makes the model immutable."""
-
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
     def get_command(self) -> str:
         """Build the shell command of this job from the `job` block of config.json.
 
         Raises:
-            ValueError: When an INGESTION or DATA_QUALITY job has no table_name configured in jobs.json.
+            ValueError: When an INGESTION, DATA_QUALITY or SINGLE_ETL job has no table_name
+                configured in jobs.json.
         """
         job_config = get_job_config()
 
@@ -161,6 +149,9 @@ class Job(BaseModel):
 
         if self.job_type == EJobType.INGESTION:
             return job_config.ingestion.get_command_string(self.job_type.value, self.table_name)
+
+        if self.job_type == EJobType.SINGLE_ETL:
+            return job_config.single_etl.get_command_string(self.job_type.value, self.table_name)
 
         return job_config.data_quality.get_command_string(self.job_type.value, self.table_name)
 
