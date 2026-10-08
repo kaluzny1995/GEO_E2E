@@ -67,6 +67,7 @@ All settings are in `config.json` (abridged — the `tasks` array holds one entr
 | `host`     | RabbitMQ host                                            |
 | `port`     | RabbitMQ port (RabbitMQ container maps `5673` → `5672`)  |
 | `tasks`    | List of scheduled job chains (one entry per data source)      |
+| `union`    | The union fan-in schedule (one entry) — see [Union Config](#union-config) |
 
 ### Celery Settings
 
@@ -92,6 +93,20 @@ Nested under `celery_app.celery_settings` (as set in `config.json`; fallback def
 | `minute`      | Minute — integer `0`-`59` or a crontab expression (e.g. `*/15`), unlike `hour` |
 | `timezone`    | IANA timezone string (e.g. `Europe/Warsaw`, `UTC`)            |
 | `name`        | Unique Celery Beat task name, conventionally `geo_e2e_<source_name>` (e.g. `geo_e2e_NIFC`) |
+
+## Union Config
+
+Nested under `celery_app.union` — schedules the `union_etl` task, which runs the [`Union` job](#union-job-union) after every data source finished. Every chain writes a completion marker (`logs/progress/<date>/<source_name>`) when it ends, whatever its result; the union task waits until all sources from `tasks` have one:
+
+| Field | Description | Config value |
+|-------|-------------|--------------|
+| `name` | Unique Celery Beat task name | `geo_e2e_union` |
+| `month` / `day` | Cron month / day of month (`*` = every) | `*` / `*` |
+| `hour` | Hour of day `0`-`23` in local timezone (converted to UTC automatically) | `4` — after the last source starts at 04:00 |
+| `minute` | Minute | `15` |
+| `timezone` | IANA timezone string | `Europe/Warsaw` |
+| `poll_seconds` | Wait between two marker checks (the task re-queues itself) | `60` |
+| `max_attempts` | Marker checks before the deadline — afterwards the union runs anyway with a warning | `60` (≈ 1 hour after the trigger) |
 
 ## Job Config
 
@@ -172,6 +187,23 @@ The chain for each data source — which jobs run, in what order, and what happe
 
 > Checked in order: `is_failed_if_error` first (raise → task FAILURE, chain ends), then `is_stop_if_error` (warning, chain ends). With **both** flags `false` a failed job only logs a warning (`… — continuing with next jobs`) and the chain proceeds. The shipped `jobs.json` sets `is_failed_if_error: false` + `is_stop_if_error: true` on every job: a failure stops the chain with a warning and the Celery task still finishes as SUCCESS. Skipping is **per job**: only the failed job's own `next_jobs` are skipped, so a failed plain-table `DATA_QUALITY` does not stop its sibling `SINGLE_ETL`.
 
+### Union job (`Union`)
+
+Besides the nine source chains, `jobs.json` holds a bare `Union` entry — the job the `union_etl` task runs once every source chain finished (see [Union Config](#union-config)):
+
+```json
+"Union": {
+  "source_name": "Union",
+  "job_type": "SINGLE_ETL",
+  "table_name": "union_etl",
+  "is_failed_if_error": false,
+  "is_stop_if_error": true,
+  "next_jobs": []
+}
+```
+
+`SINGLE_ETL union_etl` stacks the nine `*_etl` tables into `geo.union_etl` (see [GEO_ETL — union_etl](../../GEO_ETL/docs/etl_jobs/single-etl.md#union_etl)); a non-zero exit — e.g. nothing newer to stack — follows the usual two flags (shipped: WARNING, task SUCCESS). A `DATA_QUALITY union_etl` step can be chained via `next_jobs` to measure the union table after it was rebuilt.
+
 ### Data quality step
 
 Every table in the mapping below has **two** `DATA_QUALITY` jobs: one chained directly under its `INGESTION` job (measuring the plain table), and one under the `SINGLE_ETL` job (measuring the `<table>_etl` table). The plain-table metrics are therefore computed **only after the ingestion for that table finished successfully** — a failed or skipped ingestion means `run_etl.py DATA_QUALITY <table>` never runs (the metrics would otherwise be measured on stale data), and the etl-table metrics only after the `_etl` table was rebuilt. Since each job is the last step of its branch, a failure there stops that branch without affecting anything downstream.
@@ -217,3 +249,5 @@ Edit `config.json` — change `hour` and `minute` in the task config. The schedu
 2. Add a chain to `jobs.json` under the same `source_name` — `DOWNLOAD`, then a chained `INGESTION` job with its `table_name`, whose `next_jobs` hold a `DATA_QUALITY` job on the same table and a `SINGLE_ETL` job on `<table_name>_etl` (itself chaining a `DATA_QUALITY` job on `<table_name>_etl`).
 3. Make sure the source exists in GEO_Download's `config.json` and that the table exists in GEO_ETL.
 4. Restart the worker and beat.
+
+The union fan-in needs no change — the union task expects a marker for every entry in `celery_app.tasks`, so the new source is covered automatically.

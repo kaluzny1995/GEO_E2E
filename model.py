@@ -36,6 +36,24 @@ class CeleryTask(BaseModel):
     name: str
 
 
+class UnionTask(BaseModel):
+    """The `union` beat schedule entry — when the union fan-in is triggered and how long it waits
+    for the data sources to finish (`poll_seconds` x `max_attempts` re-checks before the deadline)."""
+
+    month: int | str
+    day: int | str
+    hour: int
+    minute: int | str
+    timezone: str
+    name: str
+    # How long the union task waits before re-checking the completion markers
+    poll_seconds: int = 60
+    # How many checks to make before the deadline — then the union job runs anyway
+    max_attempts: int = 60
+
+    model_config = ConfigDict(frozen=True)
+
+
 class JobTypeConfig(BaseModel):
     """Shell command template for one job type: folder, script and optional conda env."""
 
@@ -86,7 +104,8 @@ class CelerySettings(BaseModel):
 
 
 class CeleryAppConfig(BaseModel):
-    """The `celery_app` block of config.json — broker credentials, beat tasks and worker tuning."""
+    """The `celery_app` block of config.json — broker credentials, beat tasks, the union fan-in schedule
+    and worker tuning."""
 
     name: str
     username: str
@@ -94,6 +113,7 @@ class CeleryAppConfig(BaseModel):
     host: str
     port: int
     tasks: list[CeleryTask]
+    union: UnionTask
     celery_settings: CelerySettings = CelerySettings()
 
     model_config = ConfigDict(frozen=True)

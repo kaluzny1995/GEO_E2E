@@ -4,7 +4,15 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from model import CeleryAppConfig, CelerySettings, CeleryTask, JobConfig, JobTypeConfig, get_job_config
+from model import (
+    CeleryAppConfig,
+    CelerySettings,
+    CeleryTask,
+    JobConfig,
+    JobTypeConfig,
+    UnionTask,
+    get_job_config,
+)
 
 
 def test_celery_task_creation() -> None:
@@ -40,6 +48,41 @@ def test_celery_task_int_fields() -> None:
     assert task.day == 15
     assert task.hour == 10
     assert task.minute == 30
+
+
+def test_union_task_creation() -> None:
+    """UnionTask keeps the configured schedule fields and the polling knobs."""
+    # Arrange
+    # Act
+    task = UnionTask(
+        month="*",
+        day="*",
+        hour=4,
+        minute=15,
+        timezone="Europe/Warsaw",
+        name="geo_e2e_union",
+        poll_seconds=30,
+        max_attempts=10,
+    )
+
+    # Assert
+    assert task.hour == 4
+    assert task.minute == 15
+    assert task.timezone == "Europe/Warsaw"
+    assert task.name == "geo_e2e_union"
+    assert task.poll_seconds == 30
+    assert task.max_attempts == 10
+
+
+def test_union_task_defaults() -> None:
+    """UnionTask polls every 60 s and gives up waiting after 60 attempts."""
+    # Arrange
+    # Act
+    task = UnionTask(month="*", day="*", hour=4, minute=15, timezone="Europe/Warsaw", name="geo_e2e_union")
+
+    # Assert
+    assert task.poll_seconds == 60
+    assert task.max_attempts == 60
 
 
 def test_celery_settings_defaults() -> None:
@@ -157,7 +200,15 @@ def test_job_config_creation() -> None:
 def test_celery_app_config_get_rabbitmq_broker_string() -> None:
     """The broker URL is built from user, password, host and port."""
     # Arrange
-    config = CeleryAppConfig(name="test_app", username="guest", password="guest", host="localhost", port=5672, tasks=[])
+    config = CeleryAppConfig(
+        name="test_app",
+        username="guest",
+        password="guest",
+        host="localhost",
+        port=5672,
+        tasks=[],
+        union=UnionTask(month="*", day="*", hour=4, minute=15, timezone="UTC", name="geo_e2e_union"),
+    )
 
     # Act
     result = config.get_rabbitmq_broker_string()
@@ -250,6 +301,16 @@ def test_celery_app_config_from_config(tmp_path: Path) -> None:
                             "name": "geo_e2e_TestSource",
                         }
                     ],
+                    "union": {
+                        "name": "geo_e2e_union",
+                        "month": "*",
+                        "day": "*",
+                        "hour": 4,
+                        "minute": 45,
+                        "timezone": "UTC",
+                        "poll_seconds": 30,
+                        "max_attempts": 10,
+                    },
                 }
             }
         )
@@ -271,3 +332,8 @@ def test_celery_app_config_from_config(tmp_path: Path) -> None:
     assert result.celery_settings.worker_max_memory_per_child == 200000
     assert result.celery_settings.worker_prefetch_multiplier == 2
     assert result.celery_settings.task_acks_late is False
+    assert result.union.name == "geo_e2e_union"
+    assert result.union.hour == 4
+    assert result.union.minute == 45
+    assert result.union.poll_seconds == 30
+    assert result.union.max_attempts == 10

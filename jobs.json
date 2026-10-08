@@ -376,5 +376,13 @@
         ]
       }
     ]
+  },
+  "Union": {
+    "source_name": "Union",
+    "job_type": "SINGLE_ETL",
+    "table_name": "union_etl",
+    "is_failed_if_error": false,
+    "is_stop_if_error": true,
+    "next_jobs": []
   }
 }

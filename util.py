@@ -1,13 +1,18 @@
-"""Shared helpers: Celery beat cleanup, subprocess execution, logging and memory reporting."""
+"""Shared helpers: Celery beat cleanup, subprocess execution, logging, memory reporting
+and the completion markers the union task waits for."""
 
 import datetime as dt
 import glob
 import logging
 import os
+import shutil
 import subprocess
 
 import psutil
 import pytz
+
+# Completion markers of finished source chains: logs/progress/<date>/<source_name>
+_PROGRESS_ROOT = os.path.join("logs", "progress")
 
 
 def celerybeat_cleanup() -> None:
@@ -51,6 +56,36 @@ def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging
         logger.addHandler(handler)
 
     return logger
+
+
+def mark_source_done(source_name: str) -> None:
+    """Write today's completion marker for a finished source chain.
+
+    Called when a chain ends — whatever its result (success, failure or config error),
+    so the union task can tell that the source will not produce anything new today.
+    """
+    marker_dir = os.path.join(_PROGRESS_ROOT, dt.date.today().isoformat())
+    os.makedirs(marker_dir, exist_ok=True)
+    with open(os.path.join(marker_dir, source_name), "w") as marker:
+        marker.write(dt.datetime.now().isoformat(timespec="seconds"))
+
+
+def get_pending_sources(sources: list[str]) -> list[str]:
+    """Return the sources from *sources* with no completion marker for today, sorted by name."""
+    marker_dir = os.path.join(_PROGRESS_ROOT, dt.date.today().isoformat())
+    done = set(os.listdir(marker_dir)) if os.path.isdir(marker_dir) else set()
+    return sorted(set(sources) - done)
+
+
+def cleanup_stale_progress() -> None:
+    """Remove the completion markers of previous days (today's markers are kept)."""
+    if not os.path.isdir(_PROGRESS_ROOT):
+        return
+    today = dt.date.today().isoformat()
+    for name in os.listdir(_PROGRESS_ROOT):
+        path = os.path.join(_PROGRESS_ROOT, name)
+        if name != today and os.path.isdir(path):
+            shutil.rmtree(path)
 
 
 def to_utc(hour: int, timezone: str = "Europe/Warsaw") -> int:

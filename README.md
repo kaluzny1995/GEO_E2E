@@ -6,6 +6,8 @@ GIS Data End-to-End Pipeline — a Celery-based task scheduler that orchestrates
 
 GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it schedules and monitors jobs by spawning subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`, `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
 
+A tenth scheduled task fans the sources back in: every chain writes a completion marker (`logs/progress/<date>/<source_name>`) when it finishes — whatever its result — and the `union_etl` task, triggered after the source window, runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl` once every marker exists (re-checking every minute, and running anyway with a warning after a deadline if a source never finishes).
+
 Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). A chain is executed recursively inside a single Celery task, and a failed job ends that chain — controlled per job by `is_failed_if_error` (raise → Celery FAILURE) and `is_stop_if_error` (skip `next_jobs`); the shipped config sets `is_failed_if_error: false` + `is_stop_if_error: true` everywhere, so a failure stops the chain with a warning and the task still succeeds.
 
 The system requires two always-on processes:
@@ -19,6 +21,7 @@ RabbitMQ acts as the message broker between them, ensuring tasks are queued reli
 - **Cron-like scheduling** — define per-source schedules with month, day, hour, minute, and timezone; tasks are named `geo_e2e_<data_source>`.
 - **Timezone-aware** — schedule times are specified in local timezone (e.g. `Europe/Warsaw`) and converted to UTC automatically.
 - **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so in the same Celery task DOWNLOAD is followed by INGESTION, whose `next_jobs` are the plain-table DATA_QUALITY job and the SINGLE_ETL job (itself ending with DATA_QUALITY on the `_etl` table). A failing job skips the jobs chained below it with a warning (`is_stop_if_error: true`, `is_failed_if_error: false` → the Celery task still succeeds); with both flags `false` the chain would carry on.
+- **Union fan-in** — a completion marker per source (`logs/progress/<date>/<source_name>`, written whatever the chain's result) lets the `union_etl` task wait for all nine chains and then stack every `*_etl` table into `geo.union_etl`; it re-queues itself every `poll_seconds` and runs anyway with a warning after `max_attempts`.
 - **Subprocess execution** — each step runs as an isolated subprocess, capturing stdout/stderr for logging.
 - **Structured logging** — the whole chain writes to one timestamped log file under `logs/<source>/`.
 - **Memory monitoring** — logs system, worker, and subprocess memory usage (`xxx out of yyy GiB (zzz %) used`) at task start and finish.
@@ -47,6 +50,10 @@ flowchart TD
     N -->|JDBC| L
     N -->|next_jobs| O[GEO_ETL/run_etl.py DATA_QUALITY table_name_etl]
     O -->|JDBC| L
+    D -->|cron trigger 04:15| P[union_etl task]
+    P -->|check markers| Q[logs/progress/{date}/{source}]
+    Q -->|all 9 finished| R[GEO_ETL/run_etl.py SINGLE_ETL union_etl]
+    R -->|JDBC| L
     F -->|logging| J[logs/source/celery_*.log]
 ```
 

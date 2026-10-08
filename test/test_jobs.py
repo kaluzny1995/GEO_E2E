@@ -147,13 +147,16 @@ def test_job_from_config_unknown_source(jobs_path: Path) -> None:
 
 
 def test_jobs_json_chains_data_quality_after_ingestion() -> None:
-    """Every source in jobs.json runs DATA_QUALITY on its table right after a successful INGESTION."""
+    """Every source chain in jobs.json runs DATA_QUALITY on its table right after a successful INGESTION
+    (the `Union` entry is skipped — it is a bare SINGLE_ETL job, not a source chain)."""
     # Arrange
     with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
         sources = json.load(f)
 
     # Act & Assert
     for source_name, raw in sources.items():
+        if raw["job_type"] != "DOWNLOAD":
+            continue
         ingestion = raw["next_jobs"][0]
 
         assert ingestion["job_type"] == "INGESTION", source_name
@@ -167,14 +170,16 @@ def test_jobs_json_chains_data_quality_after_ingestion() -> None:
 
 
 def test_jobs_json_chains_single_etl_and_etl_data_quality() -> None:
-    """Every source in jobs.json chains SINGLE_ETL on the <table>_etl script under its INGESTION job,
-    followed by a DATA_QUALITY job on the same etl table."""
+    """Every source chain in jobs.json chains SINGLE_ETL on the <table>_etl script under its INGESTION job,
+    followed by a DATA_QUALITY job on the same etl table (the bare `Union` entry is skipped)."""
     # Arrange
     with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
         sources = json.load(f)
 
     # Act & Assert
     for source_name, raw in sources.items():
+        if raw["job_type"] != "DOWNLOAD":
+            continue
         ingestion = raw["next_jobs"][0]
         etl_table = f"{ingestion['table_name']}_etl"
 
@@ -209,6 +214,24 @@ def test_jobs_json_every_job_stops_chain_without_failing_task() -> None:
             assert job["is_failed_if_error"] is False, location
             assert job["is_stop_if_error"] is True, location
             stack.extend(job["next_jobs"])
+
+
+def test_jobs_json_union_job_stacks_every_source_table() -> None:
+    """The `Union` entry is a bare SINGLE_ETL job on union_etl with the shipped failure flags,
+    run by the union_etl task after every source chain finished."""
+    # Arrange
+    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
+        union = json.load(f)["Union"]
+
+    # Act & Assert
+    assert union == {
+        "source_name": "Union",
+        "job_type": "SINGLE_ETL",
+        "table_name": "union_etl",
+        "is_failed_if_error": False,
+        "is_stop_if_error": True,
+        "next_jobs": [],
+    }
 
 
 def test_job_get_command_download() -> None:

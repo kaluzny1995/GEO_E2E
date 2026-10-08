@@ -12,12 +12,13 @@ tox -e py311 -- -k jobs                   # filtered run (arguments after -- are
 ```
 
 Tests cover:
-- **Models** — `CeleryTask`, `CeleryAppConfig`, `CelerySettings`, `JobTypeConfig`, `JobConfig`, `Job`, `EJobType` creation and method behavior
+- **Models** — `CeleryTask`, `UnionTask`, `CeleryAppConfig`, `CelerySettings`, `JobTypeConfig`, `JobConfig`, `Job`, `EJobType` creation and method behavior
 - **Config loading** — `from_config()` and `get_job_config()` with mock JSON files
 - **Broker string** — RabbitMQ connection string generation
 - **Command pattern** — subprocess command construction (each step runs via `conda run --no-capture-output` in its configured env)
 - **Job chains** — `Job.from_config()` loads `jobs.json`, `Job.run()` executes `next_jobs` recursively (DOWNLOAD → INGESTION → plain-table DATA_QUALITY + SINGLE_ETL → etl-table DATA_QUALITY) and applies the two failure flags: `is_failed_if_error` raises `CalledProcessError` (Celery FAILURE), `is_stop_if_error` skips `next_jobs` after a warning, both `false` continues the chain — the shipped config uses `false` + `true`, and skipping is per job, so a failed plain-table DATA_QUALITY does not stop its sibling SINGLE_ETL
-- **Task wiring** — beat schedule entries named `geo_e2e_<source>` calling `app.geo_e2e`, chain execution and failure handling
+- **Task wiring** — beat schedule entries named `geo_e2e_<source>` calling `app.geo_e2e` plus `geo_e2e_union` calling `app.union_etl`, chain execution and failure handling
+- **Union fan-in** — completion markers written whatever the chain's result, `union_etl` re-queueing itself while sources are pending, the deadline fallback that runs the union job anyway, stale-marker cleanup and the `Union` entry in `jobs.json`
 - **Settings, timezone and logging** — `CelerySettings` defaults/overrides, `to_utc()` schedule conversion, `celerybeat_cleanup()` file removal and `setup_logger()` output
 - **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
 
@@ -59,7 +60,7 @@ Ruff rules: `line-length = 120`, `target-version = "py311"`; `logs/`, `__pycache
 |---------|-----------|--------|
 | `tox` | default gate = `lint` + `py311` | ✅ |
 | `tox -e lint` | `ruff check --output-format=concise .` | ✅ 0 findings |
-| `tox -e py311` | full pytest suite (52 tests) | ✅ |
+| `tox -e py311` | full pytest suite (66 tests) | ✅ |
 | `tox -e typecheck` | `mypy` (`app.py`, `model.py`, `util.py`) | ✅ 0 errors |
 | `tox -e format` | `ruff format --check .` | ✅ 13 files already formatted |
 | `tox -e warnings` | `pytest -W error::DeprecationWarning` | ✅ |

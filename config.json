@@ -95,7 +95,17 @@
         "timezone": "Europe/Warsaw",
         "name": "geo_e2e_NIFC"
       }
-    ]
+    ],
+    "union": {
+      "name": "geo_e2e_union",
+      "month": "*",
+      "day": "*",
+      "hour": 4,
+      "minute": 15,
+      "timezone": "Europe/Warsaw",
+      "poll_seconds": 60,
+      "max_attempts": 60
+    }
   },
   "job": {
     "download": {

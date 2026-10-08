@@ -1,6 +1,7 @@
 """Unit tests for the helper functions defined in util.py."""
 
 import os
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -179,3 +180,70 @@ def test_log_memory_usage_subprocess_label(mock_get_memory: MagicMock, tmp_path:
     with open(log_file) as f:
         content = f.read()
     assert "Subprocess Memory: 1.50 out of 8.00 GiB (18.75 %) used" in content
+
+
+def test_mark_source_done_writes_timestamped_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """mark_source_done() creates logs/progress/<today>/<source> containing the finish time."""
+    # Arrange
+    monkeypatch.chdir(tmp_path)
+
+    # Act
+    util.mark_source_done("NIFC")
+
+    # Assert
+    marker = tmp_path / "logs" / "progress" / date.today().isoformat() / "NIFC"
+    assert marker.exists()
+    assert marker.read_text()  # ISO timestamp of the moment the chain finished
+
+
+def test_get_pending_sources_only_reports_unmarked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only sources without a marker for today come back as pending."""
+    # Arrange
+    monkeypatch.chdir(tmp_path)
+    util.mark_source_done("NIFC")
+
+    # Act
+    pending = util.get_pending_sources(["NIFC", "GDACS", "EONET"])
+
+    # Assert
+    assert pending == ["EONET", "GDACS"]
+
+
+def test_get_pending_sources_without_markers_lists_every_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no progress directory at all every source is pending."""
+    # Arrange
+    monkeypatch.chdir(tmp_path)
+
+    # Act
+    pending = util.get_pending_sources(["NIFC", "GDACS"])
+
+    # Assert
+    assert pending == ["GDACS", "NIFC"]
+
+
+def test_cleanup_stale_progress_keeps_only_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Marker directories of previous days are removed, today's are kept."""
+    # Arrange
+    monkeypatch.chdir(tmp_path)
+    util.mark_source_done("NIFC")
+    stale_dir = tmp_path / "logs" / "progress" / "2000-01-01"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "NIFC").write_text("2000-01-01T02:00:00")
+
+    # Act
+    util.cleanup_stale_progress()
+
+    # Assert
+    assert not stale_dir.exists()
+    assert (tmp_path / "logs" / "progress" / date.today().isoformat() / "NIFC").exists()
+
+
+def test_cleanup_stale_progress_without_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """cleanup_stale_progress() is a no-op when the progress directory does not exist."""
+    # Arrange
+    monkeypatch.chdir(tmp_path)
+
+    # Act & Assert (should not raise)
+    util.cleanup_stale_progress()

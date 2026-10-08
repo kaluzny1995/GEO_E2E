@@ -40,12 +40,26 @@ The chain runs in the worker (which must be running) and writes to `logs/NIFC/ce
 
 > Run it from the project directory: importing `app` also runs `celerybeat_cleanup()`, which deletes the `celerybeat-schedule*` files, so prefer this while the beat is stopped (otherwise just wait for the next scheduled run).
 
+## Run the union job
+
+The union task is scheduled as `geo_e2e_union` (04:15 Europe/Warsaw, after the source window): it waits until every source chain has a completion marker for today — `logs/progress/<date>/<source_name>`, written when a chain finishes whatever its result — re-checking every `poll_seconds` (up to `max_attempts`), then runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl`. After the deadline it runs anyway with a warning, so a missing source never blocks it.
+
+```bash
+# Through the worker: checks the markers and waits (re-queues itself) while sources are pending
+conda run -n geo_e2e_311 python -c "from app import union_etl; union_etl.delay()"
+
+# In-process, skipping the wait (attempt = max_attempts goes straight to the deadline path)
+conda run -n geo_e2e_311 python -c "from app import union_etl, config; union_etl(config.union.max_attempts)"
+```
+
 ## Logs
 
-Each chain writes one timestamped file in this project, and each step writes its own in the sibling project:
+Each chain writes one timestamped file in this project (the union task writes one file per day, shared by its poll attempts), and each step writes its own in the sibling project:
 
 ```
 logs/<source>/celery_<source>_<timestamp>.log                        # GEO_E2E — whole chain (step output streamed in)
+logs/Union/celery_Union_<date>.log                                   # GEO_E2E — union fan-in (waiting for markers + the union run)
+logs/progress/<date>/<source_name>                                   # GEO_E2E — completion marker written when a source chain finishes (any result)
 ../GEO_Download/logs/<source>/download_<source>_<timestamp>.log      # GEO_Download — DOWNLOAD step
 ../GEO_ETL/logs/ingestion/ingestion_<table>_<timestamp>.log          # GEO_ETL — INGESTION step
 ../GEO_ETL/logs/data_quality/data_quality_<table>_<timestamp>.log    # GEO_ETL — DATA_QUALITY step (plain and _etl table)
