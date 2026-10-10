@@ -1,94 +1,85 @@
 # GEO_E2E
 
-GIS Data End-to-End Pipeline — a Celery-based task scheduler that orchestrates automated geospatial data downloads from the [GEO_Download](../GEO_Download) project and the follow-up ingestion into Supabase via the [GEO_ETL](../GEO_ETL) project.
+GIS Data End-to-End Pipeline — an Apache Airflow-based orchestrator that runs automated geospatial data downloads from the [GEO_Download](../GEO_Download) project and the follow-up ingestion into Supabase via the [GEO_ETL](../GEO_ETL) project, all visible in the Airflow web UI.
 
 ## Overview
 
-GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it schedules and monitors jobs by spawning subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`, `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
+GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it defines one Airflow DAG (`geo_pipeline`) whose tasks spawn subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`, `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
 
-A tenth scheduled task fans the sources back in: every chain writes a completion marker (`logs/progress/<date>/<source_name>`) when it finishes — whatever its result — and the `union_etl` task, triggered after the source window, runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl` once every marker exists (re-checking every minute, and running anyway with a warning after a deadline if a source never finishes).
+A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `ingestion.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done` trigger rule, so it starts as soon as the last single-ETL finished, whatever the chains' results. The DATA_QUALITY jobs are terminal steps with no successors (like in the old Celery chains).
 
-Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). A chain is executed recursively inside a single Celery task, and a failed job ends that chain — controlled per job by `is_failed_if_error` (raise → Celery FAILURE) and `is_stop_if_error` (skip `next_jobs`); the shipped config sets `is_failed_if_error: false` + `is_stop_if_error: true` everywhere, so a failure stops the chain with a warning and the task still succeeds.
+Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). `model.build_task_specs()` flattens every chain into Airflow tasks (`dags/geo_pipeline.py` maps the specs to `BashOperator`s), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
 
-The system requires two always-on processes:
-1. **Celery Beat** — a scheduler that sends tasks to RabbitMQ at configured cron-like intervals.
-2. **Celery Worker** — a process that picks up tasks from the queue and executes the job chain subprocesses.
+The system runs as Docker Compose services:
 
-RabbitMQ acts as the message broker between them, ensuring tasks are queued reliably even if the worker is temporarily offline.
+1. **Airflow Scheduler** — triggers the `geo_pipeline` DAG daily at 02:00 (Europe/Warsaw) and runs its tasks (LocalExecutor).
+2. **Airflow API server + UI** — web UI at http://localhost:8090 (login: `airflow_admin` / `airflow_admin` from `.env`) for monitoring, manually triggering and re-running jobs.
+3. **Airflow DAG processor** — parses `dags/geo_pipeline.py` into tasks.
+
+PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
 
 ## Features
 
-- **Cron-like scheduling** — define per-source schedules with month, day, hour, minute, and timezone; tasks are named `geo_e2e_<data_source>`.
-- **Timezone-aware** — schedule times are specified in local timezone (e.g. `Europe/Warsaw`) and converted to UTC automatically.
-- **Job chains (`next_jobs`)** — each source's chain lives in `jobs.json`; after a job finishes successfully its `next_jobs` run recursively, so in the same Celery task DOWNLOAD is followed by INGESTION, whose `next_jobs` are the plain-table DATA_QUALITY job and the SINGLE_ETL job (itself ending with DATA_QUALITY on the `_etl` table). A failing job skips the jobs chained below it with a warning (`is_stop_if_error: true`, `is_failed_if_error: false` → the Celery task still succeeds); with both flags `false` the chain would carry on.
-- **Union fan-in** — a completion marker per source (`logs/progress/<date>/<source_name>`, written whatever the chain's result) lets the `union_etl` task wait for all nine chains and then stack every `*_etl` table into `geo.union_etl`; it re-queues itself every `poll_seconds` and runs anyway with a warning after `max_attempts`.
-- **Subprocess execution** — each step runs as an isolated subprocess, capturing stdout/stderr for logging.
-- **Structured logging** — the whole chain writes to one timestamped log file under `logs/<source>/`.
-- **Memory monitoring** — logs system, worker, and subprocess memory usage (`xxx out of yyy GiB (zzz %) used`) at task start and finish.
-- **Beat cleanup** — automatically removes stale Celery Beat schedule files on startup to prevent corruption.
+- **Dependency-driven sequencing** — DOWNLOAD → INGESTION → (DATA_QUALITY, SINGLE_ETL → DATA_QUALITY) is expressed as DAG dependencies; no marker files, no polling.
+- **Web UI monitoring** — live grid/gantt/log view of every job at http://localhost:8090; failures show up as red tasks instead of hidden log warnings.
+- **Union fan-in with `all_done`** — the union job runs as soon as all nine `ingestion.single_etl` tasks finish, whatever their results, and needs no deadline fallback; the DATA_QUALITY jobs stay terminal (no successors).
+- **Failure gating** — a failed task skips everything chained below it (`all_success` trigger rule = the old `is_stop_if_error` semantics), siblings unaffected.
+- **Pools** — at most 3 concurrent downloads and 2 concurrent ETL/Spark jobs.
+- **Timeouts, no retries** — every task is killed after 30 minutes (old `task_time_limit`) and never retried.
+- **Subprocess execution** — each step runs as an isolated `conda run` subprocess, captured in the Airflow task log.
+- **Memory monitoring** — logs system memory usage (`xxx out of yyy GiB (zzz %) used`) at task success and failure.
 - **Frozen Pydantic models** — all configuration objects are immutable.
 
 ## Workflow
 
 ```mermaid
 flowchart TD
-    A[config.json] -->|load| B[CeleryAppConfig]
-    J2[jobs.json] -->|load chain| E
-    B -->|broker| C[RabbitMQ]
-    B -->|tasks| D[Celery Beat Scheduler]
-    D -->|cron trigger| E[geo_e2e task]
-    E -->|queue| C
-    C -->|dispatch| F[Celery Worker]
-    F -->|Job.run| G[GEO_Download/run_download.py]
-    G -->|HTTP GET| H[USGS FDSN API]
-    H -->|CSV response| I[Parse & Save CSV]
-    I -->|next_jobs| K[GEO_ETL/run_etl.py INGESTION table_name]
-    K -->|JDBC| L[Supabase]
-    K -->|next_jobs| M[GEO_ETL/run_etl.py DATA_QUALITY table_name]
-    M -->|JDBC| L
-    K -->|next_jobs| N[GEO_ETL/run_etl.py SINGLE_ETL table_name_etl]
-    N -->|JDBC| L
-    N -->|next_jobs| O[GEO_ETL/run_etl.py DATA_QUALITY table_name_etl]
-    O -->|JDBC| L
-    D -->|cron trigger 04:15| P[union_etl task]
-    P -->|check markers| Q[logs/progress/{date}/{source}]
-    Q -->|all 9 finished| R[GEO_ETL/run_etl.py SINGLE_ETL union_etl]
-    R -->|JDBC| L
-    F -->|logging| J[logs/source/celery_*.log]
+    A[jobs.json] -->|build_task_specs| B[dags/geo_pipeline.py]
+    B -->|schedule 02:00 Europe/Warsaw| C[Airflow Scheduler]
+    C -->|pool: download (3 slots)| D[NIFC.download ... USGS_Earthquake.download]
+    D -->|all_success| E[...ingestion]
+    E -->|all_success| F[...ingestion.data_quality]
+    E -->|all_success| G[...ingestion.single_etl]
+    G -->|all_success| H[...ingestion.single_etl.data_quality]
+    F -->|all_done| U[Union.single_etl]
+    H -->|all_done| U
+    D -->|HTTP GET| I[USGS FDSN API]
+    I -->|CSV| J[GEO_Download/run_download.py]
+    E -->|JDBC + Spark| K[GEO_ETL/run_etl.py INGESTION / DATA_QUALITY / SINGLE_ETL]
+    U -->|JDBC + Spark| L[geo.union_etl]
+    C -->|task logs| M[http://localhost:8090]
 ```
 
 ## Tech Stack
 
-| Component        | Technology                                  |
-|------------------|---------------------------------------------|
-| Language         | Python 3.11                                 |
-| Task Queue       | Celery >= 5.3.0                             |
-| Message Broker   | RabbitMQ                                    |
-| Data Validation  | Pydantic >= 2.0.0                           |
-| HTTP Client      | requests >= 2.31.0 (used by GEO_Download)  |
-| Timezone         | pytz >= 2023.3                              |
-| Memory Monitor   | psutil >= 5.9.0                             |
-| Testing          | pytest >= 7.0.0                             |
-| Linting/Format   | ruff >= 0.6 (lint + format + import sort)   |
-| Check runner     | tox >= 4.0 (isolated lint/test/typecheck)   |
-| Type checking    | mypy >= 1.10 (run via `tox -e typecheck`)   |
-| Environment      | Conda                                       |
-| Cluster          | Docker Compose (RabbitMQ + Spark 3.5.5)     |
+| Component        | Technology                                    |
+|------------------|-----------------------------------------------|
+| Language         | Python 3.11                                   |
+| Orchestrator     | Apache Airflow 3.3.2 (LocalExecutor)          |
+| Web UI           | Airflow API server on http://localhost:8090   |
+| Metadata DB      | PostgreSQL 16 (host port 5472)                |
+| Data Validation  | Pydantic >= 2.0.0                             |
+| Memory Monitor   | psutil >= 5.9.0                               |
+| Testing          | pytest >= 7.0.0                               |
+| Linting/Format   | ruff >= 0.6 (lint + format + import sort)     |
+| Check runner     | tox >= 4.0 (isolated lint/test/typecheck)     |
+| Type checking    | mypy >= 1.10 (run via `tox -e typecheck`)     |
+| Environment      | Conda                                         |
+| Cluster          | Docker Compose (Airflow + Spark 3.5.5)        |
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
-| [Architecture](docs/architecture.md) | Project layout, the chain execution model and failure handling. |
-| [Configuration](docs/configuration.md) | Full `config.json` and `jobs.json` reference — schedules, command templates, chains, source → table mapping. |
-| [Usage](docs/usage.md) | Starting the worker/beat, running a chain manually, log locations and example output. |
+| [Architecture](docs/architecture.md) | Project layout, DAG generation and failure handling. |
+| [Configuration](docs/configuration.md) | `config.json` and `jobs.json` reference — command templates, chains, DAG settings, source → table mapping, and how to construct the DAG (placing jobs, dependencies, union fan-in). |
+| [Usage](docs/usage.md) | Starting the Airflow stack, the web UI, manual triggers, log locations and example output. |
 | [Development](docs/development.md) | Running the tests, Ruff lint/format, mypy and tox environments. |
 
 ## Prerequisites
 
 - **Conda** — for environment management
-- **RabbitMQ** — reachable at the `celery_app.port` from `config.json` (`5673` with the bundled Docker Compose, which maps host `5673` → container `5672`)
-- **Docker** — for running RabbitMQ and the Spark cluster (optional but recommended)
+- **Docker** — for the Airflow stack and the Spark cluster
 - **GEO_Download** — must be a sibling directory (i.e. `../GEO_Download/`) with the `geo_download_311` conda env created, since downloads run there
 - **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion, single-ETL and data-quality runs happen there
 - **Spark cluster** — must be up (`docker compose up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion, single-ETL and data-quality jobs can connect
@@ -97,7 +88,7 @@ flowchart TD
 
 ### 1. Create the Conda environments
 
-This project's own environment (ruff, tox and mypy come from the `pip:` section):
+This project's own environment (ruff, tox, mypy and the pinned Airflow packages come from the `pip:` section):
 
 ```bash
 conda env create -f environment.yml
@@ -116,35 +107,61 @@ conda env create -f ../GEO_Download/environment.yml   # geo_download_311
 conda env create -f ../GEO_ETL/environment.yml        # geo_etl_311
 ```
 
-### 2. Configure environment variables
+### 2. Configure environment variables (mandatory)
 
-Copy or edit the `.env` file in this directory. It defines the path to the data folder shared between Docker containers:
+**Mandatory before the first `docker compose` command** — create the `.env` file in this directory by copying the committed template and adjusting the values:
+
+```bash
+cp .env.example .env   # then edit the six values
+```
+
+`.env` defines the machine-specific paths, uid and the Airflow UI login — **the only place where your real values live** (`.env` is git-ignored; the compose file and the rest of the repo contain only variable references, no private paths or credentials):
 
 ```
-GEO_DATA_DIR=/absolute/path/to/GEO_Download/data
+GEO_DATA_DIR=<GEO_ROOT>/GEO_Download/data
+GEO_ROOT=<parent dir of the sibling projects>
+CONDA_ROOT=<conda base dir, e.g. $(conda info --base)>
+AIRFLOW_UID=$(id -u)
+_AIRFLOW_WWW_USER_USERNAME=<airflow_username>
+_AIRFLOW_WWW_USER_PASSWORD=<airflow_password>
 ```
 
-> **Important:** The `.env` file contains machine-specific paths and is excluded from git (listed in `.gitignore`). Each developer must configure it locally.
+> **Important:** `docker compose` refuses to start with a clear error when `GEO_ROOT`, `CONDA_ROOT` or the two `_AIRFLOW_WWW_USER_*` credentials are missing — all are required: the sibling projects and conda are bind-mounted **at their host paths** inside the containers so that `conda run -n <env>` (absolute env shebangs) and the `cd ..;cd GEO_*` commands keep resolving, and `airflow-init` creates the web UI admin user from the credentials.
 
 ### 3. Start services with Docker Compose
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 This starts:
 
-| Service | Container | Ports | Purpose |
-|---------|-----------|-------|---------|
-| RabbitMQ | `geo_rabbitmq` | 5673, 15673 | Message broker for Celery |
-| Spark Master | `geo_spark_master` | 7078, 8083 | Spark cluster master |
-| Spark Worker 1 | `geo_spark_worker_1` | – | Spark worker (2 cores, 2g RAM); its web UI (`SPARK_WORKER_WEBUI_PORT` 8084) is container-internal only |
-| Spark Worker 2 | `geo_spark_worker_2` | – | Spark worker (2 cores, 2g RAM); its web UI (`SPARK_WORKER_WEBUI_PORT` 8085) is container-internal only |
+| Service | Ports | Purpose |
+|---------|-------|---------|
+| `airflow-postgres` | 5472 | Airflow metadata database |
+| `airflow-init` | – | One-shot: DB migration, admin user creation (exits 0) |
+| `airflow-dag-processor` | – | Parses `dags/geo_pipeline.py` |
+| `airflow-scheduler` | – | Triggers the DAG and runs its tasks (LocalExecutor) |
+| `airflow-api-server` | 8090 | Airflow REST API + web UI |
+| Spark Master | 7078, 8083 | Spark cluster master |
+| Spark Worker 1 | – | Spark worker (2 cores, 2g RAM); its web UI (8084) is container-internal only |
+| Spark Worker 2 | – | Spark worker (2 cores, 2g RAM); its web UI (8085) is container-internal only |
 
+**Airflow UI:** http://localhost:8090 (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env`)
 **Spark Web UI:** http://localhost:8083
-**RabbitMQ Management UI:** http://localhost:15673 (user: `geo_mq_admin`, pass: `geo_mq_admin`)
 
-### 4. Verify directory structure
+> The Airflow containers use `network_mode: host`, so task subprocesses reach the Spark master at `spark://localhost:7078` (the address in `../GEO_ETL/config.json`) and your host conda envs via their bind-mounted absolute paths. Postgres stays on the bridge network with host port `5472` — Airflow reaches it at `127.0.0.1:5472`.
+
+### 4. Nothing else to configure — pools and unpausing are automatic
+
+Two one-time UI steps are automated:
+
+- **Pools** — `airflow-init` seeds them on every start (idempotent): `download` = 3 slots, `etl` = 2 slots.
+- **Unpausing** — `dags_are_paused_at_creation=false`, so `geo_pipeline` is created **unpaused** on first parse and runs daily at 02:00 (Europe/Warsaw).
+
+Verify in the UI at http://localhost:8090 → **DAGs** (the toggle is on) or via `docker compose run --rm airflow-cli pools list` / `dags list`. You can also trigger a run manually via **Trigger DAG**.
+
+### 5. Verify directory structure
 
 All three projects must be siblings under the same parent directory (`GeographicData/`). Both GEO_E2E and GEO_ETL expect GEO_Download to be located at `../GEO_Download/`:
 
@@ -159,12 +176,17 @@ GeographicData/
 │   └── ...
 ├── GEO_E2E/                # This project (orchestrator + Docker Compose)
 │   ├── docker-compose.yaml
+│   ├── .env.example        # Template for the machine-specific .env (committed)
 │   ├── .env                # Machine-specific paths (not in git)
-│   ├── app.py
-│   ├── config.json
-│   ├── jobs.json
-│   ├── model.py
-│   ├── util.py
+│   ├── config.json         # Command templates per job type
+│   ├── jobs.json           # Job chains per data source
+│   ├── model.py            # Config models + build_task_specs()
+│   ├── util.py             # Memory logging helpers
+│   ├── dags/
+│   │   └── geo_pipeline.py # The Airflow DAG (geo_pipeline)
+│   ├── docker/
+│   │   └── airflow/
+│   │       └── Dockerfile # Airflow image (providers + psutil + pydantic)
 │   ├── environment.yml
 │   ├── docs/
 │   └── ...
@@ -178,19 +200,18 @@ GeographicData/
 
 ## Usage
 
-Start the worker and the beat in **separate terminals** (worker first):
+Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-# Terminal 1 — worker (executes the job chains)
-conda run -n geo_e2e_311 celery -A app.geo_app worker --loglevel=info --concurrency=2
-
-# Terminal 2 — beat (sends tasks on schedule)
-conda run -n geo_e2e_311 celery -A app.geo_app beat --loglevel=info
+docker compose up -d --build              # build the Airflow image, start the stack
+docker compose logs -f airflow-scheduler  # follow the scheduler (task execution)
 ```
 
-See [Usage](docs/usage.md) for running a single chain manually, log locations and example output.
+Open **http://localhost:8090** (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env`) to watch the `geo_pipeline` grid, re-run failed tasks (**Clear**), inspect task logs, trigger a run manually (**Trigger DAG**) or pause/unpause the schedule (**Active/Paused** toggle on the **DAGs** page). The DAG is unpaused from the start and the pools are pre-seeded (see [Setup](#4-nothing-else-to-configure--pools-and-unpausing-are-automatic)) — no post-install clicks required.
 
-Configuration lives in `config.json` (schedules and command templates) and `jobs.json` (chains) — see [Configuration](docs/configuration.md). Quality checks live in [Development](docs/development.md) (`tox`, `ruff check .`, `mypy`).
+See [Usage](docs/usage.md) for manual triggers, log locations and example output.
+
+Configuration lives in `config.json` (command templates) and `jobs.json` (chains), with schedule/pool settings in `dags/geo_pipeline.py` — see [Configuration](docs/configuration.md). Quality checks live in [Development](docs/development.md) (`tox`, `ruff check .`, `mypy`).
 
 ## Related Projects
 

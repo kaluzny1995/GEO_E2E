@@ -1,18 +1,137 @@
-version: "3.8"
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+    args:
+      CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}
+  image: geo_airflow:3.3.2
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__DAGS_FOLDER: ${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}/GEO_E2E/dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # Create DAGs unpaused on first parse — no manual unpause in the UI needed
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@127.0.0.1:5472/airflow
+    AIRFLOW__API__PORT: "8090"
+    AIRFLOW__API__BASE_URL: http://localhost:8090
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://localhost:8090/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-geo_e2e_dev_jwt_secret}
+    AIRFLOW__API_AUTH__JWT_ISSUER: airflow
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW_HOME: /opt/airflow
+    HOME: /opt/airflow
+    CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}
+  volumes:
+    # Mounted at the same absolute path inside the container so conda env shebangs
+    # and sibling-project paths keep resolving — the values live only in .env (not in git)
+    - ${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}:${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}
+    - ${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}:${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}
+    - airflow_data:/opt/airflow
+  user: "${AIRFLOW_UID:-50000}:0"
+  network_mode: host
+  depends_on: &airflow-common-depends-on
+    airflow-postgres:
+      condition: service_healthy
 
 services:
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: geo_rabbitmq
-    ports:
-      - "5673:5672"
-      - "15673:15672"
+  airflow-postgres:
+    image: postgres:16
+    container_name: geo_airflow_postgres
     environment:
-      RABBITMQ_DEFAULT_USER: geo_mq_admin
-      RABBITMQ_DEFAULT_PASS: geo_mq_admin
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5472:5432"
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins /opt/airflow/config
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
+        /entrypoint airflow version
+        # Seed the concurrency pools (idempotent — re-running docker compose up resets them to these values).
+        # Run through /entrypoint (sets up the airflow user env); skip the env-triggered migrate/user
+        # steps on these extra calls — they already ran above.
+        unset _AIRFLOW_DB_MIGRATE _AIRFLOW_WWW_USER_CREATE
+        /entrypoint airflow pools set download 3 0
+        /entrypoint airflow pools set etl 2 0
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:?Set _AIRFLOW_WWW_USER_USERNAME in .env (see .env.example)}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?Set _AIRFLOW_WWW_USER_PASSWORD in .env (see .env.example)}
+    user: "0:0"
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    command: dag-processor
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    command: scheduler
+    restart: always
+    # `python -m airflow` (not the `airflow` console script): healthchecks bypass /entrypoint,
+    # so HOME stays /opt/airflow and the script's interpreter can't resolve the image's
+    # /home/airflow/.local install — PATH `python` resolves that prefix via pyvenv.cfg.
+    healthcheck:
+      test: ["CMD-SHELL", "python -m airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  airflow-api-server:
+    <<: *airflow-common
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    command: api-server
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8090/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+
+  airflow-cli:
+    <<: *airflow-common
+    profiles: [debug]
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    command:
+      - bash
+      - -c
+      - airflow
 
   geo_spark_master:
     build: ../GEO_ETL/spark_cluster_image
@@ -64,7 +183,8 @@ services:
     restart: always
 
 volumes:
-  rabbitmq_data:
+  airflow_data:
+  postgres_data:
 
 networks:
   geo_network:

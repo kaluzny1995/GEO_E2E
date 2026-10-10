@@ -1,14 +1,12 @@
-"""Config models for the Celery app (config.json) and the E2E job chains (jobs.json)."""
+"""Config models for the job commands (config.json), the E2E job chains (jobs.json)
+and the Airflow task specs derived from them."""
 
 import json
-import logging
 import os
-import subprocess
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
-
-from util import run_command
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATH = os.path.join(_PROJECT_DIR, "config.json")
@@ -22,36 +20,6 @@ class EJobType(StrEnum):
     INGESTION = "INGESTION"
     DATA_QUALITY = "DATA_QUALITY"
     SINGLE_ETL = "SINGLE_ETL"
-
-
-class CeleryTask(BaseModel):
-    """One beat schedule entry — decides when a source's E2E chain is triggered."""
-
-    source_name: str
-    month: int | str
-    day: int | str
-    hour: int
-    minute: int | str
-    timezone: str
-    name: str
-
-
-class UnionTask(BaseModel):
-    """The `union` beat schedule entry — when the union fan-in is triggered and how long it waits
-    for the data sources to finish (`poll_seconds` x `max_attempts` re-checks before the deadline)."""
-
-    month: int | str
-    day: int | str
-    hour: int
-    minute: int | str
-    timezone: str
-    name: str
-    # How long the union task waits before re-checking the completion markers
-    poll_seconds: int = 60
-    # How many checks to make before the deadline — then the union job runs anyway
-    max_attempts: int = 60
-
-    model_config = ConfigDict(frozen=True)
 
 
 class JobTypeConfig(BaseModel):
@@ -84,53 +52,6 @@ class JobConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
-class CelerySettings(BaseModel):
-    """Celery worker & broker tuning — all values come from config.json."""
-
-    # Hard kill after N seconds
-    task_time_limit: int = 600
-    # Soft timeout (raises SoftTimeLimitExceeded) after N seconds
-    task_soft_time_limit: int = 480
-    # Recycle worker after N tasks (clears leaked memory)
-    worker_max_tasks_per_child: int = 20
-    # Max memory per worker child in kilobytes
-    worker_max_memory_per_child: int = 400000
-    # Only grab 1 task at a time so downloads don't pile up
-    worker_prefetch_multiplier: int = 1
-    # Requeue tasks if the worker crashes mid-download
-    task_acks_late: bool = True
-
-    model_config = ConfigDict(frozen=True)
-
-
-class CeleryAppConfig(BaseModel):
-    """The `celery_app` block of config.json — broker credentials, beat tasks, the union fan-in schedule
-    and worker tuning."""
-
-    name: str
-    username: str
-    password: str
-    host: str
-    port: int
-    tasks: list[CeleryTask]
-    union: UnionTask
-    celery_settings: CelerySettings = CelerySettings()
-
-    model_config = ConfigDict(frozen=True)
-
-    @staticmethod
-    def from_config() -> "CeleryAppConfig":
-        """Load the app config from config.json, falling back to CelerySettings defaults."""
-        with open(_CONFIG_PATH) as f:
-            raw = json.load(f)["celery_app"]
-        settings = raw.pop("celery_settings", {})
-        return CeleryAppConfig(**raw, celery_settings=CelerySettings(**settings))
-
-    def get_rabbitmq_broker_string(self) -> str:
-        """Build the AMQP broker URL (`amqp://user:password@host:port//`) from the config fields."""
-        return f"amqp://{self.username}:{self.password}@{self.host}:{self.port}//"
-
-
 def get_job_config() -> JobConfig:
     """Load the `job` block of config.json (DOWNLOAD, INGESTION, DATA_QUALITY and SINGLE_ETL command templates)."""
     with open(_CONFIG_PATH) as f:
@@ -138,8 +59,10 @@ def get_job_config() -> JobConfig:
 
 
 class Job(BaseModel):
-    """A single job in a chain — its `next_jobs` are executed recursively (same as E2EReddit's Job),
-    unless the job fails and `is_stop_if_error` / `is_failed_if_error` say otherwise."""
+    """A single job in a chain — its `next_jobs` are turned into downstream Airflow tasks.
+
+    `is_failed_if_error` / `is_stop_if_error` are kept for documentation; the DAG maps them
+    to Airflow trigger rules (all_success / skip semantics), so they are not consulted here."""
 
     source_name: str
     job_type: EJobType
@@ -175,44 +98,89 @@ class Job(BaseModel):
 
         return job_config.data_quality.get_command_string(self.job_type.value, self.table_name)
 
-    def run(self, logger: logging.Logger, log_file: str) -> None:
-        """Execute this job's command, then its `next_jobs` recursively.
-
-        Handling of a non-zero return code, in order of precedence:
-
-        1. `is_failed_if_error` — the error is logged and `CalledProcessError` raised,
-           which fails the Celery task and (by the exception) ends the chain.
-        2. `is_stop_if_error` — a warning is logged and `next_jobs` are skipped; the
-           task still finishes successfully.
-        3. neither — a warning is logged and `next_jobs` run anyway.
-
-        Raises:
-            subprocess.CalledProcessError: When the command fails and `is_failed_if_error` is true.
-        """
-        command = self.get_command()
-        logger.info(f'Starting {self.job_type.value} job for "{self.source_name}".')
-        logger.info(f"Executing command: {command}")
-
-        returncode = run_command(command, log_file)
-
-        if returncode != 0:
-            message = f'{self.job_type.value} job for "{self.source_name}" exited with return code {returncode}'
-            if self.is_failed_if_error:
-                logger.error(message)
-                raise subprocess.CalledProcessError(returncode=returncode, cmd=command)
-            if self.is_stop_if_error:
-                logger.warning(f"{message} — next jobs will not be executed")
-                return
-            logger.warning(f"{message} — continuing with next jobs")
-        else:
-            logger.info(f'Finished {self.job_type.value} job for "{self.source_name}". Return code: {returncode}.')
-
-        # run the next jobs
-        for next_job in self.next_jobs:
-            next_job.run(logger=logger, log_file=log_file)
-
     @staticmethod
     def from_config(source_name: str) -> "Job":
         """Returns the root job of the chain for given source from jobs.json"""
         with open(_JOBS_PATH) as f:
             return Job(**json.load(f)[source_name])
+
+
+class TaskSpec(BaseModel):
+    """One Airflow task: the shell command of a single job plus the task ids it must wait for."""
+
+    task_id: str
+    source_name: str
+    job_type: EJobType
+    command: str
+    # Task ids of the parent jobs (empty for a chain's root job)
+    upstream: tuple[str, ...] = ()
+    trigger_rule: Literal["all_success", "all_done"] = "all_success"
+
+    model_config = ConfigDict(frozen=True)
+
+
+def load_chains() -> dict[str, Job]:
+    """Load every source chain of jobs.json, keyed by source name."""
+    with open(_JOBS_PATH) as f:
+        return {source_name: Job(**data) for source_name, data in json.load(f).items()}
+
+
+def _walk_chain(source_name: str, job: Job, parent_id: str | None, path: tuple[str, ...]) -> list[TaskSpec]:
+    """Depth-first walk of one chain.
+
+    Returns the task specs of the visited subtree. Task ids follow the
+    job-type path inside the chain, skipping the DOWNLOAD prefix (`NIFC.ingestion.single_etl`).
+    """
+    # The chain root's DOWNLOAD is not part of its children's id prefix (NIFC.ingestion, not NIFC.download.ingestion)
+    id_path = tuple(job_type for job_type in path if job_type != EJobType.DOWNLOAD.lower())
+    task_path = (*id_path, job.job_type.lower())
+    task_id = ".".join((source_name, *task_path))
+    spec = TaskSpec(
+        task_id=task_id,
+        source_name=source_name,
+        job_type=job.job_type,
+        command=job.get_command(),
+        upstream=(parent_id,) if parent_id else (),
+    )
+
+    specs = [spec]
+    for next_job in job.next_jobs:
+        specs.extend(_walk_chain(source_name, next_job, task_id, task_path))
+    return specs
+
+
+def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
+    """Flatten every chain in jobs.json into the Airflow task specs of the mega-DAG.
+
+    Task ids follow the job-type path inside the chain (`NIFC.ingestion.single_etl`).
+    Every non-union job waits for its parent with the default `all_success` trigger rule
+    (failed downloads skip their downstream jobs, like the old `is_stop_if_error` chains).
+    The union chain's root waits for the SINGLE_ETL task of every source chain with
+    `all_done`, so it stacks the fresh `*_etl` tables whatever the chains' results —
+    the DATA_QUALITY jobs stay terminal steps with no successors, like in the old Celery chains.
+
+    Raises:
+        ValueError: When jobs.json has no chain for *union_source*.
+    """
+    chains = load_chains()
+    if union_source not in chains:
+        raise ValueError(f'jobs.json has no "{union_source}" chain')
+
+    specs: list[TaskSpec] = []
+    union_specs: list[TaskSpec] = []
+    single_etl_ids: list[str] = []
+
+    for source_name, root in chains.items():
+        walked = _walk_chain(source_name, root, parent_id=None, path=())
+        if source_name == union_source:
+            union_specs = walked
+        else:
+            specs.extend(walked)
+            single_etl_ids.extend(spec.task_id for spec in walked if spec.job_type == EJobType.SINGLE_ETL)
+
+    fan_in = tuple(single_etl_ids)
+    union_specs = [
+        spec if spec.upstream else spec.model_copy(update={"upstream": fan_in, "trigger_rule": "all_done"})
+        for spec in union_specs
+    ]
+    return specs + union_specs

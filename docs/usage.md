@@ -2,64 +2,83 @@
 
 # Usage
 
-## Start the Celery worker and beat scheduler
+## Start the Airflow stack
 
-Both processes must run simultaneously in **separate terminals**. The worker executes tasks; the beat sends them on schedule.
+> **Prerequisite:** the `.env` file must exist in the project root — `docker compose` fails fast with `required variable GEO_ROOT is missing` otherwise. Create it once per machine: `cp .env.example .env` and adjust the six values, including the Airflow UI login (see [README — Setup](../README.md#2-configure-environment-variables-mandatory)).
 
-**Terminal 1 — Worker** (executes the job chains):
+Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-conda run -n geo_e2e_311 celery -A app.geo_app worker --loglevel=info --concurrency=2
+docker compose up -d --build
 ```
 
-> `--concurrency=2` limits the worker to 2 simultaneous pipelines (default is # of CPU cores). Combined with `worker_max_memory_per_child` and `task_time_limit` configured in `config.json`, this prevents memory exhaustion from piled-up jobs.
-
-**Terminal 2 — Beat** (sends tasks on schedule):
+This builds the Airflow image (first run only) and starts Postgres, the one-shot `airflow-init` (DB migration + admin user), the DAG processor, the scheduler and the API server, plus the Spark cluster. Follow the scheduler to watch task execution:
 
 ```bash
-conda run -n geo_e2e_311 celery -A app.geo_app beat --loglevel=info
+docker compose logs -f airflow-scheduler
 ```
 
-Or run both in one command (worker in background, beat in foreground):
+> The Airflow containers use `network_mode: host`, so task subprocesses reach Spark at `spark://localhost:7078` and your host conda envs via their bind-mounted absolute paths. See [README — Setup](../README.md#3-start-services-with-docker-compose).
+
+## The web UI
+
+Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env`):
+
+| Page | Use it for |
+|------|------------|
+| **DAGs** | `geo_pipeline` is unpaused from the start (`dags_are_paused_at_creation=false`); see next/last run |
+| **Grid** view of a run | per-task state: green = success, red = failed, grey = skipped (downstream of a failure), light green = running |
+| **Graph** view | the full task graph — 46 tasks: 9 chains of 5 + the union fan-in |
+| **Gantt** view | task durations over the run |
+| Task log | the full stdout/stderr of the task's `conda run` subprocess (also includes the memory callback line) |
+| **Trigger DAG** | run the pipeline manually, without waiting for the 02:00 schedule |
+| **Active/Paused** toggle | turn the daily 02:00 schedule on/off (manual triggers still work while paused) |
+| Failed task → **Clear** | re-run just that task (and its downstream) after a fix — no marker files to clean up |
+| **Admin → Pools** | inspect the `download` (3 slots) and `etl` (2 slots) pools — seeded automatically by `airflow-init` |
+
+## Run the pipeline manually
+
+**Whole DAG** — **Trigger DAG** button in the UI (top right of the DAG details), or via the CLI container:
 
 ```bash
-conda run -n geo_e2e_311 bash -c "celery -A app.geo_app worker --loglevel=info --concurrency=2 & celery -A app.geo_app beat --loglevel=info"
+docker compose run --rm airflow-cli dags trigger geo_pipeline
 ```
 
-> **Important:** Always start the worker **before** the beat, or at the same time. If the beat fires with no worker online, the task will be queued in RabbitMQ and executed once a worker connects.
+**A single job** — two options:
 
-## Run a chain manually
-
-Useful for testing a single source without waiting for the schedule:
+- **Re-run inside an existing run** — open the run in the UI, click the task and press **Clear**: only that task (plus the downstream tasks cleared with it) runs again; its upstreams stay untouched. This is the normal way to retry one failed job after a fix (see also [Logs](#logs) below).
+- **Standalone, without recording a run** — `tasks test` executes one task once in a temporary run, keeping nothing in the metadata DB (useful for debugging a job in isolation; the memory callback still writes to the output):
 
 ```bash
-conda run -n geo_e2e_311 python -c "from app import geo_e2e; geo_e2e.delay('NIFC')"
+docker compose run --rm airflow-cli tasks test geo_pipeline NIFC.download
 ```
 
-The chain runs in the worker (which must be running) and writes to `logs/NIFC/celery_NIFC_<timestamp>.log`.
+## Pause / unpause the schedule
 
-> Run it from the project directory: importing `app` also runs `celerybeat_cleanup()`, which deletes the `celerybeat-schedule*` files, so prefer this while the beat is stopped (otherwise just wait for the next scheduled run).
-
-## Run the union job
-
-The union task is scheduled as `geo_e2e_union` (04:15 Europe/Warsaw, after the source window): it waits until every source chain has a completion marker for today — `logs/progress/<date>/<source_name>`, written when a chain finishes whatever its result — re-checking every `poll_seconds` (up to `max_attempts`), then runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl`. After the deadline it runs anyway with a warning, so a missing source never blocks it.
+The **Active/Paused** toggle next to `geo_pipeline` on the **DAGs** page turns the daily 02:00 schedule off/on. Same via the CLI container:
 
 ```bash
-# Through the worker: checks the markers and waits (re-queues itself) while sources are pending
-conda run -n geo_e2e_311 python -c "from app import union_etl; union_etl.delay()"
+docker compose run --rm airflow-cli dags pause geo_pipeline     # schedule off
+docker compose run --rm airflow-cli dags unpause geo_pipeline   # schedule on
+```
 
-# In-process, skipping the wait (attempt = max_attempts goes straight to the deadline path)
-conda run -n geo_e2e_311 python -c "from app import union_etl, config; union_etl(config.union.max_attempts)"
+Pausing stops only *scheduled* runs — a manual **Trigger DAG** still works while paused, and already-running runs finish normally.
+
+Useful debugging commands (the `airflow-cli` service is behind the `debug` compose profile):
+
+```bash
+docker compose run --rm airflow-cli dags list                  # confirm geo_pipeline is discovered
+docker compose run --rm airflow-cli dags list-import-errors    # empty = the DAG file parses cleanly
+docker compose run --rm airflow-cli tasks states-for-dag-run geo_pipeline <run_id>
+docker compose run --rm airflow-cli pools list
 ```
 
 ## Logs
 
-Each chain writes one timestamped file in this project (the union task writes one file per day, shared by its poll attempts), and each step writes its own in the sibling project:
+Every task's output is the Airflow task log (web UI → task → **Log**), stored on the shared `airflow_data` volume under `logs/dag_id=geo_pipeline/...`. Each step additionally writes its own log in the sibling project:
 
 ```
-logs/<source>/celery_<source>_<timestamp>.log                        # GEO_E2E — whole chain (step output streamed in)
-logs/Union/celery_Union_<date>.log                                   # GEO_E2E — union fan-in (waiting for markers + the union run)
-logs/progress/<date>/<source_name>                                   # GEO_E2E — completion marker written when a source chain finishes (any result)
+<Airflow UI> → geo_pipeline → <run> → <task> → Log        # GEO_E2E — subprocess output + memory callback
 ../GEO_Download/logs/<source>/download_<source>_<timestamp>.log      # GEO_Download — DOWNLOAD step
 ../GEO_ETL/logs/ingestion/ingestion_<table>_<timestamp>.log          # GEO_ETL — INGESTION step
 ../GEO_ETL/logs/data_quality/data_quality_<table>_<timestamp>.log    # GEO_ETL — DATA_QUALITY step (plain and _etl table)
@@ -68,41 +87,18 @@ logs/progress/<date>/<source_name>                                   # GEO_E2E �
 
 ### Example log output
 
-Excerpt from `logs/NIFC/celery_NIFC_2026-10-04T20:31:07.324061.log` (the subprocess output of each step is streamed into the same file):
+Excerpt of the `NIFC.ingestion` task log (the subprocess output of the step is streamed into the same log):
 
 ```
-2026-10-04 20:31:07,324 INFO ---- Celery triggered E2E job chain for NIFC ----
-2026-10-04 20:31:07,324 INFO Worker Memory: 21.57 out of 62.50 GiB (34.50 %) used
-2026-10-04 20:31:07,325 INFO Starting DOWNLOAD job for "NIFC".
-2026-10-04 20:31:07,325 INFO Executing command: cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC
----- NIFC Downloader ----
+[2026-10-04 20:31:11] {bash.py:300} INFO - Running command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire
+[2026-10-04 20:31:11] {bash.py:301} INFO - cwd: <GEO_ROOT>/GEO_E2E
 ...
-2026-10-04 20:31:11,836 INFO Finished DOWNLOAD job for "NIFC". Return code: 0.
-2026-10-04 20:31:11,836 INFO Starting INGESTION job for "NIFC".
-2026-10-04 20:31:11,836 INFO Executing command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire
+2026-10-04 20:31:15,642 INFO ---- Ingestion job: nifc_fire ----
 ...
-2026-10-04 20:32:03,342 INFO Finished INGESTION job for "NIFC". Return code: 0.
-2026-10-04 20:32:03,342 INFO Starting DATA_QUALITY job for "NIFC".
-2026-10-04 20:32:03,342 INFO Executing command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY nifc_fire
-...
-2026-10-04 20:33:08,509 INFO Finished DATA_QUALITY job for "NIFC". Return code: 0.
-2026-10-04 20:33:08,509 INFO Starting SINGLE_ETL job for "NIFC".
-2026-10-04 20:33:08,509 INFO Executing command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py SINGLE_ETL nifc_fire_etl
-...
-2026-10-04 20:33:43,018 INFO Finished SINGLE_ETL job for "NIFC". Return code: 0.
-2026-10-04 20:33:43,019 INFO Starting DATA_QUALITY job for "NIFC".
-2026-10-04 20:33:43,019 INFO Executing command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY nifc_fire_etl
-...
-2026-10-04 20:34:47,667 INFO Finished DATA_QUALITY job for "NIFC". Return code: 0.
-2026-10-04 20:34:47,668 INFO Worker Memory: 21.87 out of 62.50 GiB (35.00 %) used
+[2026-10-04 20:32:03] {bash.py:310} INFO - Command exited with return code 0
+[2026-10-04 20:32:03] {taskinstance.py:2811} INFO - NIFC.ingestion Memory: 21.57 out of 62.50 GiB (34.50 %) used
 ```
 
-The plain-table `DATA_QUALITY` job and the `SINGLE_ETL` job are siblings under `INGESTION`, so skipping is per job: if `DATA_QUALITY nifc_fire` fails, only its own branch is skipped and `SINGLE_ETL nifc_fire_etl` still runs.
+A non-zero return code fails the task (`Command exited with return code 1` + red state in the UI), and everything chained below it is skipped — e.g. a failed `NIFC.download` skips `NIFC.ingestion` and its whole subtree, while `GDACS.download` is unaffected. The union task still runs once every chain reached a terminal state (`all_done`).
 
-A non-zero return code is logged as a warning instead of `Finished ... Return code: 0.`, and the `next_jobs` are skipped. Every job in the shipped `jobs.json` has `is_failed_if_error: false` **and** `is_stop_if_error: true`, so the Celery task still finishes as SUCCESS:
-
-```
-2026-09-26 15:03:59,854 WARNING DOWNLOAD job for "NIFC" exited with return code 1 — next jobs will not be executed
-```
-
-With `is_failed_if_error: true` the same failure logs `ERROR DOWNLOAD job for "NIFC" exited with return code 1` and raises `CalledProcessError`, so the Celery task ends as FAILURE; with both flags `false` the warning reads `WARNING … — continuing with next jobs` and the chain proceeds.
+After a fix, open the failed task in the UI and press **Clear** — only that task and its downstream re-run.

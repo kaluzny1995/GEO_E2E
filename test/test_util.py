@@ -1,111 +1,8 @@
 """Unit tests for the helper functions defined in util.py."""
 
-import os
-from datetime import date
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import util
-
-
-def test_to_utc_warsaw() -> None:
-    """A local hour converts to UTC using the Warsaw offset (CEST = UTC+2)."""
-    # Arrange
-    # Act
-    result = util.to_utc(10, "Europe/Warsaw")
-
-    # Assert
-    assert result == 8  # CEST (summer) = UTC+2
-
-
-def test_to_utc_warsaw_midnight() -> None:
-    """Midnight local time maps to 22:00 UTC."""
-    # Arrange
-    # Act
-    result = util.to_utc(0, "Europe/Warsaw")
-
-    # Assert
-    assert result == 22  # CEST (summer) = UTC+2
-
-
-@pytest.mark.parametrize(
-    "hour, timezone, expected",
-    [
-        (10, "Europe/Warsaw", 8),  # CEST (summer) = UTC+2
-        (0, "Europe/Warsaw", 22),  # CEST (summer) = UTC+2
-        (12, "US/Eastern", 16),  # EDT (summer) = UTC-4
-        (0, "Asia/Tokyo", 15),  # JST = UTC+9 (no DST)
-    ],
-)
-def test_to_utc_parametrized(hour: int, timezone: str, expected: int) -> None:
-    """to_utc() is correct across different time zones."""
-    # Arrange
-    # Act
-    result = util.to_utc(hour, timezone)
-
-    # Assert
-    assert result == expected
-
-
-def test_celerybeat_cleanup_removes_files(tmp_path: Path) -> None:
-    """Every celerybeat-schedule* file is removed from the current directory."""
-    # Arrange
-    (tmp_path / "celerybeat-schedule.bak").touch()
-    (tmp_path / "celerybeat-schedule.dat").touch()
-    (tmp_path / "celerybeat-schedule.dir").touch()
-
-    original_cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        # Act
-        util.celerybeat_cleanup()
-
-        # Assert
-        assert not (tmp_path / "celerybeat-schedule.bak").exists()
-        assert not (tmp_path / "celerybeat-schedule.dat").exists()
-        assert not (tmp_path / "celerybeat-schedule.dir").exists()
-    finally:
-        os.chdir(original_cwd)
-
-
-def test_celerybeat_cleanup_no_files(tmp_path: Path) -> None:
-    """Cleanup is a no-op when no schedule files exist."""
-    # Arrange
-    original_cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        # Act & Assert (should not raise)
-        util.celerybeat_cleanup()
-    finally:
-        os.chdir(original_cwd)
-
-
-def test_setup_logger_creates_log_file(tmp_path: Path) -> None:
-    """setup_logger() creates the log file and returns an INFO logger."""
-    # Arrange
-    log_file = str(tmp_path / "logs" / "test.log")
-
-    # Act
-    logger = util.setup_logger(name="test_logger", log_file=log_file)
-
-    # Assert
-    assert os.path.exists(log_file)
-    assert logger.name == "test_logger"
-    assert logger.level == 20  # logging.INFO
-
-
-def test_setup_logger_creates_nested_directory(tmp_path: Path) -> None:
-    """Missing parent directories of the log file are created."""
-    # Arrange
-    log_file = str(tmp_path / "a" / "b" / "c" / "test.log")
-
-    # Act
-    util.setup_logger(name="test_nested", log_file=log_file)
-
-    # Assert
-    assert os.path.exists(log_file)
 
 
 def test_get_memory_info() -> None:
@@ -149,101 +46,28 @@ def test_get_memory_info_mocked(mock_vmem: MagicMock) -> None:
 
 
 @patch("util.get_memory_info")
-def test_log_memory_usage(mock_get_memory: MagicMock, tmp_path: Path) -> None:
-    """Memory usage is written to the log file in the expected format."""
+def test_log_memory_usage(mock_get_memory: MagicMock) -> None:
+    """Memory usage is written to the given logger in the expected format."""
     # Arrange
     mock_get_memory.return_value = (3.21, 15.54, 20.66)
-    log_file = str(tmp_path / "test.log")
-    logger = util.setup_logger(name="test_log_memory", log_file=log_file)
+    logger = MagicMock()
 
     # Act
     util.log_memory_usage(logger, "Worker")
 
     # Assert
-    with open(log_file) as f:
-        content = f.read()
-    assert "Worker Memory: 3.21 out of 15.54 GiB (20.66 %) used" in content
+    logger.info.assert_called_once_with("Worker Memory: 3.21 out of 15.54 GiB (20.66 %) used")
 
 
 @patch("util.get_memory_info")
-def test_log_memory_usage_subprocess_label(mock_get_memory: MagicMock, tmp_path: Path) -> None:
+def test_log_memory_usage_subprocess_label(mock_get_memory: MagicMock) -> None:
     """The label appears in the logged line (e.g. 'Subprocess Memory: ...')."""
     # Arrange
     mock_get_memory.return_value = (1.50, 8.00, 18.75)
-    log_file = str(tmp_path / "test2.log")
-    logger = util.setup_logger(name="test_log_memory_sub", log_file=log_file)
+    logger = MagicMock()
 
     # Act
     util.log_memory_usage(logger, "Subprocess")
 
     # Assert
-    with open(log_file) as f:
-        content = f.read()
-    assert "Subprocess Memory: 1.50 out of 8.00 GiB (18.75 %) used" in content
-
-
-def test_mark_source_done_writes_timestamped_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """mark_source_done() creates logs/progress/<today>/<source> containing the finish time."""
-    # Arrange
-    monkeypatch.chdir(tmp_path)
-
-    # Act
-    util.mark_source_done("NIFC")
-
-    # Assert
-    marker = tmp_path / "logs" / "progress" / date.today().isoformat() / "NIFC"
-    assert marker.exists()
-    assert marker.read_text()  # ISO timestamp of the moment the chain finished
-
-
-def test_get_pending_sources_only_reports_unmarked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only sources without a marker for today come back as pending."""
-    # Arrange
-    monkeypatch.chdir(tmp_path)
-    util.mark_source_done("NIFC")
-
-    # Act
-    pending = util.get_pending_sources(["NIFC", "GDACS", "EONET"])
-
-    # Assert
-    assert pending == ["EONET", "GDACS"]
-
-
-def test_get_pending_sources_without_markers_lists_every_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """With no progress directory at all every source is pending."""
-    # Arrange
-    monkeypatch.chdir(tmp_path)
-
-    # Act
-    pending = util.get_pending_sources(["NIFC", "GDACS"])
-
-    # Assert
-    assert pending == ["GDACS", "NIFC"]
-
-
-def test_cleanup_stale_progress_keeps_only_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Marker directories of previous days are removed, today's are kept."""
-    # Arrange
-    monkeypatch.chdir(tmp_path)
-    util.mark_source_done("NIFC")
-    stale_dir = tmp_path / "logs" / "progress" / "2000-01-01"
-    stale_dir.mkdir(parents=True)
-    (stale_dir / "NIFC").write_text("2000-01-01T02:00:00")
-
-    # Act
-    util.cleanup_stale_progress()
-
-    # Assert
-    assert not stale_dir.exists()
-    assert (tmp_path / "logs" / "progress" / date.today().isoformat() / "NIFC").exists()
-
-
-def test_cleanup_stale_progress_without_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """cleanup_stale_progress() is a no-op when the progress directory does not exist."""
-    # Arrange
-    monkeypatch.chdir(tmp_path)
-
-    # Act & Assert (should not raise)
-    util.cleanup_stale_progress()
+    logger.info.assert_called_once_with("Subprocess Memory: 1.50 out of 8.00 GiB (18.75 %) used")
