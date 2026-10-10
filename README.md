@@ -6,9 +6,9 @@ GIS Data End-to-End Pipeline — an Apache Airflow-based orchestrator that runs 
 
 GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it defines one Airflow DAG (`geo_pipeline`) whose tasks spawn subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`, `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
 
-A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `ingestion.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done` trigger rule, so it starts as soon as the last single-ETL finished, whatever the chains' results. The DATA_QUALITY jobs are terminal steps with no successors (like in the old Celery chains).
+A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `ingestion.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The DATA_QUALITY jobs are terminal steps with no successors (like in the old Celery chains).
 
-Each data source has its own job chain in `jobs.json` (`job_type` + `next_jobs`, same pattern as E2EReddit). `model.build_task_specs()` flattens every chain into Airflow tasks (`dags/geo_pipeline.py` maps the specs to `BashOperator`s), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
+Each data source's jobs live in the flat `jobs.json` registry (one object per job; `next_jobs` references the dependent jobs by `name`, same pattern as E2EReddit). `model.build_task_specs()` validates the registry and resolves it into Airflow tasks (`dags/geo_pipeline.py` maps the specs to `BashOperator`s), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
 
 The system runs as Docker Compose services:
 
@@ -22,7 +22,7 @@ PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped b
 
 - **Dependency-driven sequencing** — DOWNLOAD → INGESTION → (DATA_QUALITY, SINGLE_ETL → DATA_QUALITY) is expressed as DAG dependencies; no marker files, no polling.
 - **Web UI monitoring** — live grid/gantt/log view of every job at http://localhost:8090; failures show up as red tasks instead of hidden log warnings.
-- **Union fan-in with `all_done`** — the union job runs as soon as all nine `ingestion.single_etl` tasks finish, whatever their results, and needs no deadline fallback; the DATA_QUALITY jobs stay terminal (no successors).
+- **Union fan-in with `all_done_min_one_success`** — the union job waits for all nine `ingestion.single_etl` tasks to reach a terminal state (whatever their results) and runs only if at least one succeeded; no deadline fallback needed, and the DATA_QUALITY jobs stay terminal (no successors).
 - **Failure gating** — a failed task skips everything chained below it (`all_success` trigger rule = the old `is_stop_if_error` semantics), siblings unaffected.
 - **Pools** — at most 3 concurrent downloads and 2 concurrent ETL/Spark jobs.
 - **Timeouts, no retries** — every task is killed after 30 minutes (old `task_time_limit`) and never retried.
@@ -41,8 +41,9 @@ flowchart TD
     E -->|all_success| F[...ingestion.data_quality]
     E -->|all_success| G[...ingestion.single_etl]
     G -->|all_success| H[...ingestion.single_etl.data_quality]
-    F -->|all_done| U[Union.single_etl]
-    H -->|all_done| U
+    F -->|terminal| F2[no successors]
+    G -->|all_done_min_one_success (needs ≥1 success)| U[Union.single_etl]
+    H -->|terminal| H2[no successors]
     D -->|HTTP GET| I[USGS FDSN API]
     I -->|CSV| J[GEO_Download/run_download.py]
     E -->|JDBC + Spark| K[GEO_ETL/run_etl.py INGESTION / DATA_QUALITY / SINGLE_ETL]
@@ -211,7 +212,7 @@ Open **http://localhost:8090** (user: `airflow_admin`, pass: `airflow_admin` —
 
 See [Usage](docs/usage.md) for manual triggers, log locations and example output.
 
-Configuration lives in `config.json` (command templates) and `jobs.json` (chains), with schedule/pool settings in `dags/geo_pipeline.py` — see [Configuration](docs/configuration.md). Quality checks live in [Development](docs/development.md) (`tox`, `ruff check .`, `mypy`).
+Configuration lives in `config.json` (command templates plus the `dag` block: retries, pools, ...) and `jobs.json` (the flat job registry — each job is either *scheduled*, carrying its own `schedule` cron, or *downstreamed* on its parent) — see [Configuration](docs/configuration.md). Quality checks live in [Development](docs/development.md) (`tox`, `ruff check .`, `mypy`).
 
 ## Related Projects
 

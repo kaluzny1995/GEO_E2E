@@ -1,388 +1,433 @@
-{
-  "USGS_Earthquake": {
+[
+  {
+    "name": "DOWNLOAD-USGS_Earthquake",
     "source_name": "USGS_Earthquake",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "USGS_Earthquake",
-        "job_type": "INGESTION",
-        "table_name": "usgs_earthquake",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "USGS_Earthquake",
-            "job_type": "DATA_QUALITY",
-            "table_name": "usgs_earthquake",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "USGS_Earthquake",
-            "job_type": "SINGLE_ETL",
-            "table_name": "usgs_earthquake_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "USGS_Earthquake",
-                "job_type": "DATA_QUALITY",
-                "table_name": "usgs_earthquake_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-usgs_earthquake"
     ]
   },
-  "GDACS": {
+  {
+    "name": "INGESTION-usgs_earthquake",
+    "source_name": "USGS_Earthquake",
+    "job_type": "INGESTION",
+    "table_name": "usgs_earthquake",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-usgs_earthquake",
+      "SINGLE_ETL-usgs_earthquake_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-usgs_earthquake",
+    "source_name": "USGS_Earthquake",
+    "job_type": "DATA_QUALITY",
+    "table_name": "usgs_earthquake",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-usgs_earthquake_etl",
+    "source_name": "USGS_Earthquake",
+    "job_type": "SINGLE_ETL",
+    "table_name": "usgs_earthquake_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-usgs_earthquake_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-usgs_earthquake_etl",
+    "source_name": "USGS_Earthquake",
+    "job_type": "DATA_QUALITY",
+    "table_name": "usgs_earthquake_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-GDACS",
     "source_name": "GDACS",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "GDACS",
-        "job_type": "INGESTION",
-        "table_name": "gdacs_event",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "GDACS",
-            "job_type": "DATA_QUALITY",
-            "table_name": "gdacs_event",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "GDACS",
-            "job_type": "SINGLE_ETL",
-            "table_name": "gdacs_event_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "GDACS",
-                "job_type": "DATA_QUALITY",
-                "table_name": "gdacs_event_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-gdacs_event"
     ]
   },
-  "EONET": {
+  {
+    "name": "INGESTION-gdacs_event",
+    "source_name": "GDACS",
+    "job_type": "INGESTION",
+    "table_name": "gdacs_event",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-gdacs_event",
+      "SINGLE_ETL-gdacs_event_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-gdacs_event",
+    "source_name": "GDACS",
+    "job_type": "DATA_QUALITY",
+    "table_name": "gdacs_event",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-gdacs_event_etl",
+    "source_name": "GDACS",
+    "job_type": "SINGLE_ETL",
+    "table_name": "gdacs_event_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-gdacs_event_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-gdacs_event_etl",
+    "source_name": "GDACS",
+    "job_type": "DATA_QUALITY",
+    "table_name": "gdacs_event_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-EONET",
     "source_name": "EONET",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "EONET",
-        "job_type": "INGESTION",
-        "table_name": "eonet_event",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "EONET",
-            "job_type": "DATA_QUALITY",
-            "table_name": "eonet_event",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "EONET",
-            "job_type": "SINGLE_ETL",
-            "table_name": "eonet_event_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "EONET",
-                "job_type": "DATA_QUALITY",
-                "table_name": "eonet_event_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-eonet_event"
     ]
   },
-  "OpenMeteo_Flood": {
+  {
+    "name": "INGESTION-eonet_event",
+    "source_name": "EONET",
+    "job_type": "INGESTION",
+    "table_name": "eonet_event",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-eonet_event",
+      "SINGLE_ETL-eonet_event_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-eonet_event",
+    "source_name": "EONET",
+    "job_type": "DATA_QUALITY",
+    "table_name": "eonet_event",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-eonet_event_etl",
+    "source_name": "EONET",
+    "job_type": "SINGLE_ETL",
+    "table_name": "eonet_event_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-eonet_event_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-eonet_event_etl",
+    "source_name": "EONET",
+    "job_type": "DATA_QUALITY",
+    "table_name": "eonet_event_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-OpenMeteo_Flood",
     "source_name": "OpenMeteo_Flood",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "OpenMeteo_Flood",
-        "job_type": "INGESTION",
-        "table_name": "openmeteo_flood",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "OpenMeteo_Flood",
-            "job_type": "DATA_QUALITY",
-            "table_name": "openmeteo_flood",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "OpenMeteo_Flood",
-            "job_type": "SINGLE_ETL",
-            "table_name": "openmeteo_flood_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "OpenMeteo_Flood",
-                "job_type": "DATA_QUALITY",
-                "table_name": "openmeteo_flood_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-openmeteo_flood"
     ]
   },
-  "USGS_NWIS": {
+  {
+    "name": "INGESTION-openmeteo_flood",
+    "source_name": "OpenMeteo_Flood",
+    "job_type": "INGESTION",
+    "table_name": "openmeteo_flood",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-openmeteo_flood",
+      "SINGLE_ETL-openmeteo_flood_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-openmeteo_flood",
+    "source_name": "OpenMeteo_Flood",
+    "job_type": "DATA_QUALITY",
+    "table_name": "openmeteo_flood",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-openmeteo_flood_etl",
+    "source_name": "OpenMeteo_Flood",
+    "job_type": "SINGLE_ETL",
+    "table_name": "openmeteo_flood_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-openmeteo_flood_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-openmeteo_flood_etl",
+    "source_name": "OpenMeteo_Flood",
+    "job_type": "DATA_QUALITY",
+    "table_name": "openmeteo_flood_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-USGS_NWIS",
     "source_name": "USGS_NWIS",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "USGS_NWIS",
-        "job_type": "INGESTION",
-        "table_name": "usgs_nwis",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "USGS_NWIS",
-            "job_type": "DATA_QUALITY",
-            "table_name": "usgs_nwis",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "USGS_NWIS",
-            "job_type": "SINGLE_ETL",
-            "table_name": "usgs_nwis_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "USGS_NWIS",
-                "job_type": "DATA_QUALITY",
-                "table_name": "usgs_nwis_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-usgs_nwis"
     ]
   },
-  "Avalanche_ORG": {
+  {
+    "name": "INGESTION-usgs_nwis",
+    "source_name": "USGS_NWIS",
+    "job_type": "INGESTION",
+    "table_name": "usgs_nwis",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-usgs_nwis",
+      "SINGLE_ETL-usgs_nwis_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-usgs_nwis",
+    "source_name": "USGS_NWIS",
+    "job_type": "DATA_QUALITY",
+    "table_name": "usgs_nwis",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-usgs_nwis_etl",
+    "source_name": "USGS_NWIS",
+    "job_type": "SINGLE_ETL",
+    "table_name": "usgs_nwis_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-usgs_nwis_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-usgs_nwis_etl",
+    "source_name": "USGS_NWIS",
+    "job_type": "DATA_QUALITY",
+    "table_name": "usgs_nwis_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-Avalanche_ORG",
     "source_name": "Avalanche_ORG",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "Avalanche_ORG",
-        "job_type": "INGESTION",
-        "table_name": "avalanche_org",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "Avalanche_ORG",
-            "job_type": "DATA_QUALITY",
-            "table_name": "avalanche_org",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "Avalanche_ORG",
-            "job_type": "SINGLE_ETL",
-            "table_name": "avalanche_org_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "Avalanche_ORG",
-                "job_type": "DATA_QUALITY",
-                "table_name": "avalanche_org_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-avalanche_org"
     ]
   },
-  "IBTrACS": {
+  {
+    "name": "INGESTION-avalanche_org",
+    "source_name": "Avalanche_ORG",
+    "job_type": "INGESTION",
+    "table_name": "avalanche_org",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-avalanche_org",
+      "SINGLE_ETL-avalanche_org_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-avalanche_org",
+    "source_name": "Avalanche_ORG",
+    "job_type": "DATA_QUALITY",
+    "table_name": "avalanche_org",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-avalanche_org_etl",
+    "source_name": "Avalanche_ORG",
+    "job_type": "SINGLE_ETL",
+    "table_name": "avalanche_org_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-avalanche_org_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-avalanche_org_etl",
+    "source_name": "Avalanche_ORG",
+    "job_type": "DATA_QUALITY",
+    "table_name": "avalanche_org_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-IBTrACS",
     "source_name": "IBTrACS",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "IBTrACS",
-        "job_type": "INGESTION",
-        "table_name": "ibtracs_cyclone",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "IBTrACS",
-            "job_type": "DATA_QUALITY",
-            "table_name": "ibtracs_cyclone",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "IBTrACS",
-            "job_type": "SINGLE_ETL",
-            "table_name": "ibtracs_cyclone_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "IBTrACS",
-                "job_type": "DATA_QUALITY",
-                "table_name": "ibtracs_cyclone_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-ibtracs_cyclone"
     ]
   },
-  "USGS_Volcano": {
+  {
+    "name": "INGESTION-ibtracs_cyclone",
+    "source_name": "IBTrACS",
+    "job_type": "INGESTION",
+    "table_name": "ibtracs_cyclone",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-ibtracs_cyclone",
+      "SINGLE_ETL-ibtracs_cyclone_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-ibtracs_cyclone",
+    "source_name": "IBTrACS",
+    "job_type": "DATA_QUALITY",
+    "table_name": "ibtracs_cyclone",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-ibtracs_cyclone_etl",
+    "source_name": "IBTrACS",
+    "job_type": "SINGLE_ETL",
+    "table_name": "ibtracs_cyclone_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-ibtracs_cyclone_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-ibtracs_cyclone_etl",
+    "source_name": "IBTrACS",
+    "job_type": "DATA_QUALITY",
+    "table_name": "ibtracs_cyclone_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-USGS_Volcano",
     "source_name": "USGS_Volcano",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "USGS_Volcano",
-        "job_type": "INGESTION",
-        "table_name": "usgs_volcano",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "USGS_Volcano",
-            "job_type": "DATA_QUALITY",
-            "table_name": "usgs_volcano",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "USGS_Volcano",
-            "job_type": "SINGLE_ETL",
-            "table_name": "usgs_volcano_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "USGS_Volcano",
-                "job_type": "DATA_QUALITY",
-                "table_name": "usgs_volcano_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-usgs_volcano"
     ]
   },
-  "NIFC": {
+  {
+    "name": "INGESTION-usgs_volcano",
+    "source_name": "USGS_Volcano",
+    "job_type": "INGESTION",
+    "table_name": "usgs_volcano",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-usgs_volcano",
+      "SINGLE_ETL-usgs_volcano_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-usgs_volcano",
+    "source_name": "USGS_Volcano",
+    "job_type": "DATA_QUALITY",
+    "table_name": "usgs_volcano",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-usgs_volcano_etl",
+    "source_name": "USGS_Volcano",
+    "job_type": "SINGLE_ETL",
+    "table_name": "usgs_volcano_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-usgs_volcano_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-usgs_volcano_etl",
+    "source_name": "USGS_Volcano",
+    "job_type": "DATA_QUALITY",
+    "table_name": "usgs_volcano_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DOWNLOAD-NIFC",
     "source_name": "NIFC",
     "job_type": "DOWNLOAD",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "schedule": "0 2 * * *",
+    "is_next_skipped_if_error": true,
     "next_jobs": [
-      {
-        "source_name": "NIFC",
-        "job_type": "INGESTION",
-        "table_name": "nifc_fire",
-        "is_failed_if_error": false,
-        "is_stop_if_error": true,
-        "next_jobs": [
-          {
-            "source_name": "NIFC",
-            "job_type": "DATA_QUALITY",
-            "table_name": "nifc_fire",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": []
-          },
-          {
-            "source_name": "NIFC",
-            "job_type": "SINGLE_ETL",
-            "table_name": "nifc_fire_etl",
-            "is_failed_if_error": false,
-            "is_stop_if_error": true,
-            "next_jobs": [
-              {
-                "source_name": "NIFC",
-                "job_type": "DATA_QUALITY",
-                "table_name": "nifc_fire_etl",
-                "is_failed_if_error": false,
-                "is_stop_if_error": true,
-                "next_jobs": []
-              }
-            ]
-          }
-        ]
-      }
+      "INGESTION-nifc_fire"
     ]
   },
-  "Union": {
+  {
+    "name": "INGESTION-nifc_fire",
+    "source_name": "NIFC",
+    "job_type": "INGESTION",
+    "table_name": "nifc_fire",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-nifc_fire",
+      "SINGLE_ETL-nifc_fire_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-nifc_fire",
+    "source_name": "NIFC",
+    "job_type": "DATA_QUALITY",
+    "table_name": "nifc_fire",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-nifc_fire_etl",
+    "source_name": "NIFC",
+    "job_type": "SINGLE_ETL",
+    "table_name": "nifc_fire_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-nifc_fire_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-nifc_fire_etl",
+    "source_name": "NIFC",
+    "job_type": "DATA_QUALITY",
+    "table_name": "nifc_fire_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "SINGLE_ETL-union_etl",
     "source_name": "Union",
     "job_type": "SINGLE_ETL",
     "table_name": "union_etl",
-    "is_failed_if_error": false,
-    "is_stop_if_error": true,
+    "is_next_skipped_if_error": true,
     "next_jobs": []
   }
-}
+]

@@ -64,12 +64,12 @@ services:
         mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins /opt/airflow/config
         chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
         /entrypoint airflow version
-        # Seed the concurrency pools (idempotent — re-running docker compose up resets them to these values).
-        # Run through /entrypoint (sets up the airflow user env); skip the env-triggered migrate/user
-        # steps on these extra calls — they already ran above.
+        # Seed the concurrency pools from config.json (`dag.pool_slots`; idempotent — re-running
+        # docker compose up resets them to the configured slot counts). The script invokes the
+        # CLI through /entrypoint; skip the env-triggered migrate/user steps on those extra calls
+        # — they already ran above.
         unset _AIRFLOW_DB_MIGRATE _AIRFLOW_WWW_USER_CREATE
-        /entrypoint airflow pools set download 3 0
-        /entrypoint airflow pools set etl 2 0
+        python "${GEO_ROOT}/GEO_E2E/docker/airflow/seed_pools.py"
         chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
     environment:
       <<: *airflow-common-env

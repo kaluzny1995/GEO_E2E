@@ -1,10 +1,14 @@
 """Unit tests for the pydantic config models defined in model.py."""
 
 import json
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from model import JobConfig, JobTypeConfig, get_job_config
+import pytest
+from pydantic import ValidationError
+
+from model import EJobType, JobConfig, JobTypeConfig, get_dag_settings, get_job_config
 
 
 def test_job_type_config_creation() -> None:
@@ -132,3 +136,74 @@ def test_get_job_config(tmp_path: Path) -> None:
     assert result.single_etl.folder_name == "TestEtlFolder"
     assert result.single_etl.python_script == "test_etl_script.py"
     assert result.single_etl.conda_env == "test_single_etl_env"
+
+
+def _dag_block() -> dict:
+    """The minimal required fields of a `dag` config block (everything else has defaults)."""
+    return {
+        "start_date": "2026-01-01",
+        "timezone": "Europe/Warsaw",
+        "pools": {"download": "download", "ingestion": "etl", "data_quality": "etl", "single_etl": "etl"},
+        "pool_slots": {"download": 3, "etl": 2},
+    }
+
+
+def test_dag_settings_defaults() -> None:
+    """DagSettings falls back to the shipped defaults for every optional knob."""
+    # Arrange & Act
+    settings = get_dag_settings()
+
+    # Assert
+    assert settings.dag_id == "geo_pipeline"
+    assert settings.start_date == date(2026, 1, 1)
+    assert settings.timezone == "Europe/Warsaw"
+    assert settings.catchup is False
+    assert settings.max_active_runs == 1
+    assert settings.tags == ["geo", "e2e"]
+    assert settings.retries == 0
+    assert settings.execution_timeout_minutes == 30
+    assert settings.union_source == "Union"
+    assert settings.pool_slots == {"download": 3, "etl": 2}
+
+
+def test_dag_settings_pool_for_maps_every_job_type() -> None:
+    """pool_for() resolves the configured pool name for each EJobType."""
+    # Arrange & Act
+    settings = get_dag_settings()
+
+    # Assert
+    assert settings.pool_for(EJobType.DOWNLOAD) == "download"
+    assert settings.pool_for(EJobType.INGESTION) == "etl"
+    assert settings.pool_for(EJobType.DATA_QUALITY) == "etl"
+    assert settings.pool_for(EJobType.SINGLE_ETL) == "etl"
+
+
+def test_dag_settings_unknown_timezone_raises(tmp_path: Path) -> None:
+    """An unknown IANA timezone is rejected at config load."""
+    # Arrange
+    block = _dag_block()
+    block["timezone"] = "Mars/Olympus_Mons"
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({"dag": block}))
+
+    # Act & Assert
+    with patch("model._CONFIG_PATH", str(config_file)), pytest.raises(ValidationError, match="unknown IANA"):
+        get_dag_settings()
+
+
+def test_get_dag_settings_reads_dag_block(tmp_path: Path) -> None:
+    """get_dag_settings() parses the `dag` block of config.json."""
+    # Arrange
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({"dag": _dag_block()}))
+
+    # Act
+    with patch("model._CONFIG_PATH", str(config_file)):
+        settings = get_dag_settings()
+
+    # Assert
+    assert settings.start_date == date(2026, 1, 1)
+    assert settings.timezone == "Europe/Warsaw"
+    assert settings.pools.download == "download"
+    assert settings.pools.single_etl == "etl"
+    assert settings.pool_slots == {"download": 3, "etl": 2}

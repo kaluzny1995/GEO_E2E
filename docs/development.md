@@ -12,11 +12,12 @@ tox -e py311 -- -k dags                   # filtered run (arguments after -- are
 ```
 
 Tests cover:
-- **Models** — `JobTypeConfig`, `JobConfig`, `Job`, `EJobType` creation and method behavior
-- **Config loading** — `get_job_config()` and `Job.from_config()` with mock JSON files
+- **Models** — `JobTypeConfig`, `JobConfig`, `Job`, `EJobType`, `DagSettings`/`PoolConfig` creation and method behavior (timezone validation, `pool_for()` job-type mapping)
+- **Config loading** — `get_job_config()` and `get_dag_settings()` with mock JSON files, plus the shipped `config.json` values
 - **Command pattern** — subprocess command construction (each step runs via `conda run --no-capture-output` in its configured env)
-- **Job chains** — `Job.from_config()` loads `jobs.json`; the shipped chains are asserted structurally (DATA_QUALITY after INGESTION, SINGLE_ETL + etl-table DATA_QUALITY, failure flags kept as documentation)
-- **DAG generation** — `build_task_specs()` turns jobs.json into Airflow task specs: one spec per job with unique path-based task ids (`NIFC.ingestion.single_etl.data_quality`), parent/child wiring via `upstream`, `all_success` for every source-chain task, the union root waiting on the nine `ingestion.single_etl` tasks with `all_done` (the DATA_QUALITY jobs stay terminal), commands carried over from `config.json`, and `ValueError` when the `Union` chain is missing
+- **Job registry** — `load_jobs()` parses the flat `jobs.json`; the shipped registry is asserted structurally (DATA_QUALITY after INGESTION, SINGLE_ETL + etl-table DATA_QUALITY, `is_next_skipped_if_error` kept as documentation, the bare Union job, the DOWNLOAD jobs scheduled and everything else downstreamed)
+- **DAG generation** — `build_task_specs()` validates the flat jobs.json registry (unique `name`s, resolvable `next_jobs` references, one parent per job, no cycles, scheduled jobs are unsourced roots sharing one cron via `resolve_schedule()`, the union job never scheduled) and turns it into Airflow task specs: one spec per job with unique path-based task ids (`NIFC.ingestion.single_etl.data_quality`), parent/child wiring via `upstream`, `all_success` for every source-chain task, the union root waiting on the nine `ingestion.single_etl` tasks with `all_done_min_one_success` (runs only if ≥1 of them succeeded; the DATA_QUALITY jobs stay terminal), commands carried over from `config.json`, and `ValueError` when the `Union` job is missing or the registry is invalid
+- **Pool seeding** — `seed_pools()` creates every `dag.pool_slots` pool via the airflow CLI through `/entrypoint`
 - **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
 
 The DAG file itself (`dags/geo_pipeline.py`) is type-checked by mypy and importable locally but not unit-tested — `apache-airflow`, `apache-airflow-providers-standard` and `pendulum` are installed in the dev env with the same pins as the Airflow container (see `environment.yml`), so the IDE resolves the imports and import regressions fail fast:

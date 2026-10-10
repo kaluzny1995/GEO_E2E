@@ -87,18 +87,22 @@ Every task's output is the Airflow task log (web UI → task → **Log**), store
 
 ### Example log output
 
-Excerpt of the `NIFC.ingestion` task log (the subprocess output of the step is streamed into the same log):
+Excerpt of the `NIFC.ingestion` task log. The step's own logger writes to its `GEO_ETL` log file **and** mirrors to stdout, so the job output (`---- Ingestion job: nifc_fire ----`, `Connected to Spark`, …) is streamed live into the same Airflow task log:
 
 ```
-[2026-10-04 20:31:11] {bash.py:300} INFO - Running command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire
-[2026-10-04 20:31:11] {bash.py:301} INFO - cwd: <GEO_ROOT>/GEO_E2E
+Running command: cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire
+cwd: <GEO_ROOT>/GEO_E2E
+Output:
+2026-10-10 20:58:21,855 INFO ---- Ingestion job: nifc_fire ----
+2026-10-10 20:58:25,922 INFO Connected to Spark: spark://localhost:7078
+2026-10-10 20:58:25,924 INFO Spark version: 3.5.5
 ...
-2026-10-04 20:31:15,642 INFO ---- Ingestion job: nifc_fire ----
-...
-[2026-10-04 20:32:03] {bash.py:310} INFO - Command exited with return code 0
-[2026-10-04 20:32:03] {taskinstance.py:2811} INFO - NIFC.ingestion Memory: 21.57 out of 62.50 GiB (34.50 %) used
+Command exited with return code 0
+NIFC.ingestion Memory: 21.57 out of 62.50 GiB (34.50 %) used
 ```
 
-A non-zero return code fails the task (`Command exited with return code 1` + red state in the UI), and everything chained below it is skipped — e.g. a failed `NIFC.download` skips `NIFC.ingestion` and its whole subtree, while `GDACS.download` is unaffected. The union task still runs once every chain reached a terminal state (`all_done`).
+For ETL steps, the JVM's `[spark]` stderr lines and the stage-memory lines are appended to stdout after the job finishes (they only exist once the log merge runs), so they appear at the end of the task log; the `GEO_ETL` `.log` file keeps the fully merged chronological view.
+
+A non-zero return code fails the task (`Command exited with return code 1` + red state in the UI), and everything chained below it is skipped — e.g. a failed `NIFC.download` skips `NIFC.ingestion` and its whole subtree, while `GDACS.download` is unaffected. The union task still runs once every chain reached a terminal state — provided at least one single-ETL succeeded; when all nine failed, it is marked `upstream_failed` without running. A source whose upstream has no new data yet (e.g. the IBTrACS `last3years` file trails the present by 1–2 days) exits non-zero and shows red by design — it is not masked.
 
 After a fix, open the failed task in the UI and press **Clear** — only that task and its downstream re-run.

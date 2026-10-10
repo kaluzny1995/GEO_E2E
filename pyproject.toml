@@ -36,7 +36,7 @@ testpaths = ["test"]
 addopts = "-q"
 
 [tool.mypy]
-files = ["model.py", "util.py", "dags"]
+files = ["model.py", "util.py", "dags", "docker"]
 python_version = "3.11"
 warn_unused_configs = true
 show_error_codes = true

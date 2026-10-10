@@ -1,193 +1,350 @@
-"""Tests for Job chains: loading from jobs.json and command building."""
+"""Tests for the flat jobs.json job registry: loading, reference validation and command building."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from model import EJobType, Job
+from model import EJobType, Job, build_task_specs, load_jobs, resolve_schedule
 
 
 @pytest.fixture()
 def jobs_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point Job.from_config() at a temporary jobs.json"""
+    """Point the jobs.json loader at a temporary file"""
     path = tmp_path / "jobs.json"
     monkeypatch.setattr("model._JOBS_PATH", str(path))
     return path
 
 
-def _chain() -> dict:
+def _chain() -> list[dict]:
     """A minimal DOWNLOAD -> INGESTION -> (DATA_QUALITY, SINGLE_ETL -> DATA_QUALITY) chain for NIFC."""
-    return {
-        "NIFC": {
+    return [
+        {
+            "name": "DOWNLOAD-NIFC",
             "source_name": "NIFC",
             "job_type": "DOWNLOAD",
-            "is_failed_if_error": False,
-            "next_jobs": [
-                {
-                    "source_name": "NIFC",
-                    "job_type": "INGESTION",
-                    "table_name": "nifc_fire",
-                    "is_failed_if_error": False,
-                    "next_jobs": [
-                        {
-                            "source_name": "NIFC",
-                            "job_type": "DATA_QUALITY",
-                            "table_name": "nifc_fire",
-                            "is_failed_if_error": False,
-                            "next_jobs": [],
-                        },
-                        {
-                            "source_name": "NIFC",
-                            "job_type": "SINGLE_ETL",
-                            "table_name": "nifc_fire_etl",
-                            "is_failed_if_error": False,
-                            "next_jobs": [
-                                {
-                                    "source_name": "NIFC",
-                                    "job_type": "DATA_QUALITY",
-                                    "table_name": "nifc_fire_etl",
-                                    "is_failed_if_error": False,
-                                    "next_jobs": [],
-                                }
-                            ],
-                        },
-                    ],
-                }
-            ],
-        }
-    }
+            "schedule": "0 2 * * *",
+            "is_next_skipped_if_error": True,
+            "next_jobs": ["INGESTION-nifc_fire"],
+        },
+        {
+            "name": "INGESTION-nifc_fire",
+            "source_name": "NIFC",
+            "job_type": "INGESTION",
+            "table_name": "nifc_fire",
+            "is_next_skipped_if_error": True,
+            "next_jobs": ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl"],
+        },
+        {
+            "name": "DATA_QUALITY-nifc_fire",
+            "source_name": "NIFC",
+            "job_type": "DATA_QUALITY",
+            "table_name": "nifc_fire",
+            "is_next_skipped_if_error": True,
+            "next_jobs": [],
+        },
+        {
+            "name": "SINGLE_ETL-nifc_fire_etl",
+            "source_name": "NIFC",
+            "job_type": "SINGLE_ETL",
+            "table_name": "nifc_fire_etl",
+            "is_next_skipped_if_error": True,
+            "next_jobs": ["DATA_QUALITY-nifc_fire_etl"],
+        },
+        {
+            "name": "DATA_QUALITY-nifc_fire_etl",
+            "source_name": "NIFC",
+            "job_type": "DATA_QUALITY",
+            "table_name": "nifc_fire_etl",
+            "is_next_skipped_if_error": True,
+            "next_jobs": [],
+        },
+    ]
 
 
-def test_job_from_config_returns_chain_root(jobs_path: Path) -> None:
-    """Job.from_config() rebuilds the whole chain starting at the root DOWNLOAD job."""
+def _load_shipped() -> list[dict]:
+    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
+        return json.load(f)
+
+
+def test_load_jobs_preserves_order_and_fields(jobs_path: Path) -> None:
+    """load_jobs() parses the flat list in file order, keeping names and next_jobs references."""
     # Arrange
     jobs_path.write_text(json.dumps(_chain()))
 
     # Act
-    job = Job.from_config("NIFC")
+    jobs = load_jobs()
 
     # Assert
-    assert job.source_name == "NIFC"
-    assert job.job_type == EJobType.DOWNLOAD
-    assert len(job.next_jobs) == 1
-
-    ingestion = job.next_jobs[0]
+    assert [job.name for job in jobs] == [
+        "DOWNLOAD-NIFC",
+        "INGESTION-nifc_fire",
+        "DATA_QUALITY-nifc_fire",
+        "SINGLE_ETL-nifc_fire_etl",
+        "DATA_QUALITY-nifc_fire_etl",
+    ]
+    ingestion = jobs[1]
+    assert ingestion.source_name == "NIFC"
     assert ingestion.job_type == EJobType.INGESTION
     assert ingestion.table_name == "nifc_fire"
-    assert len(ingestion.next_jobs) == 2
-
-    data_quality = ingestion.next_jobs[0]
-    assert data_quality.job_type == EJobType.DATA_QUALITY
-    assert data_quality.table_name == "nifc_fire"
-    assert data_quality.next_jobs == []
-
-    single_etl = ingestion.next_jobs[1]
-    assert single_etl.job_type == EJobType.SINGLE_ETL
-    assert single_etl.table_name == "nifc_fire_etl"
-    assert len(single_etl.next_jobs) == 1
-
-    etl_data_quality = single_etl.next_jobs[0]
-    assert etl_data_quality.job_type == EJobType.DATA_QUALITY
-    assert etl_data_quality.table_name == "nifc_fire_etl"
-    assert etl_data_quality.next_jobs == []
+    assert ingestion.schedule is None  # downstreamed jobs carry no schedule
+    assert ingestion.is_next_skipped_if_error is True
+    assert ingestion.next_jobs == ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl"]
+    assert jobs[0].table_name is None  # DOWNLOAD jobs carry no table_name
+    assert jobs[0].schedule == "0 2 * * *"  # scheduled jobs declare their cron
 
 
-def test_job_from_config_unknown_source(jobs_path: Path) -> None:
-    """Job.from_config() raises KeyError for a source missing from jobs.json."""
+def test_load_jobs_duplicate_name_raises(jobs_path: Path) -> None:
+    """Two jobs sharing a name fail the registry validation."""
+    # Arrange
+    jobs = _chain()
+    jobs.append({**jobs[2], "next_jobs": []})
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match='duplicate job name "DATA_QUALITY-nifc_fire"'):
+        build_task_specs()
+
+
+def test_load_jobs_unknown_reference_raises(jobs_path: Path) -> None:
+    """A next_jobs entry naming a job that does not exist fails the registry validation."""
+    # Arrange
+    jobs = _chain()
+    jobs[0]["next_jobs"] = ["INGESTION-missing"]
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match='"DOWNLOAD-NIFC" references unknown job "INGESTION-missing"'):
+        build_task_specs()
+
+
+def test_load_jobs_two_parents_raises(jobs_path: Path) -> None:
+    """A job referenced by two parent jobs fails the registry validation."""
+    # Arrange
+    jobs = _chain()
+    jobs[4]["next_jobs"] = ["DATA_QUALITY-nifc_fire"]  # the etl-table DQ also points at the plain-table DQ
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match='"DATA_QUALITY-nifc_fire" is referenced by both'):
+        build_task_specs()
+
+
+def test_load_jobs_dependency_cycle_raises(jobs_path: Path) -> None:
+    """Jobs forming a reference cycle fail the registry validation."""
+    # Arrange
+    jobs = _chain()
+    jobs.append(
+        {
+            "name": "DATA_QUALITY-cycle_a",
+            "source_name": "NIFC",
+            "job_type": "DATA_QUALITY",
+            "table_name": "nifc_fire",
+            "is_next_skipped_if_error": True,
+            "next_jobs": ["DATA_QUALITY-cycle_b"],
+        }
+    )
+    jobs.append(
+        {
+            "name": "DATA_QUALITY-cycle_b",
+            "source_name": "NIFC",
+            "job_type": "DATA_QUALITY",
+            "table_name": "nifc_fire",
+            "is_next_skipped_if_error": True,
+            "next_jobs": ["DATA_QUALITY-cycle_a"],
+        }
+    )
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match="dependency cycle among: DATA_QUALITY-cycle_a, DATA_QUALITY-cycle_b"):
+        build_task_specs()
+
+
+def _union_job() -> dict:
+    """The bare Union fan-in job of a valid registry."""
+    return {
+        "name": "SINGLE_ETL-union_etl",
+        "source_name": "Union",
+        "job_type": "SINGLE_ETL",
+        "table_name": "union_etl",
+        "is_next_skipped_if_error": True,
+        "next_jobs": [],
+    }
+
+
+def test_scheduled_job_with_parent_raises(jobs_path: Path) -> None:
+    """A scheduled job that is also referenced by a parent fails the registry validation."""
+    # Arrange
+    jobs = _chain()
+    jobs[1]["next_jobs"] = ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl", "DOWNLOAD-NIFC"]
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match='scheduled job "DOWNLOAD-NIFC" is referenced by'):
+        build_task_specs()
+
+
+def test_root_without_schedule_raises(jobs_path: Path) -> None:
+    """A root job that is neither scheduled nor the union job fails the registry validation."""
+    # Arrange
+    jobs = _chain()
+    del jobs[0]["schedule"]
+    jobs.append(_union_job())
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match='root job "DOWNLOAD-NIFC" is neither scheduled nor the union job'):
+        build_task_specs()
+
+
+def test_union_job_must_not_be_scheduled(jobs_path: Path) -> None:
+    """A scheduled union job fails the registry validation — it waits for the fan-in."""
+    # Arrange
+    jobs = _chain()
+    jobs.append({**_union_job(), "schedule": "0 2 * * *"})
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match='union job "SINGLE_ETL-union_etl" must not be scheduled'):
+        build_task_specs()
+
+
+def test_resolve_schedule_returns_the_shared_cron(jobs_path: Path) -> None:
+    """resolve_schedule() returns the cron every scheduled job declares."""
     # Arrange
     jobs_path.write_text(json.dumps(_chain()))
 
-    # Act & Assert
-    with pytest.raises(KeyError):
-        Job.from_config("UNKNOWN")
+    # Act
+    schedule = resolve_schedule()
+
+    # Assert
+    assert schedule == "0 2 * * *"
 
 
-def test_jobs_json_chains_data_quality_after_ingestion() -> None:
-    """Every source chain in jobs.json runs DATA_QUALITY on its table right after a successful INGESTION
-    (the `Union` entry is skipped — it is a bare SINGLE_ETL job, not a source chain)."""
+def test_resolve_schedule_without_scheduled_job_raises(jobs_path: Path) -> None:
+    """A registry without any scheduled job fails — the DAG needs a cron."""
     # Arrange
-    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
-        sources = json.load(f)
+    jobs = _chain()
+    del jobs[0]["schedule"]
+    jobs_path.write_text(json.dumps(jobs))
 
     # Act & Assert
-    for source_name, raw in sources.items():
-        if raw["job_type"] != "DOWNLOAD":
-            continue
-        ingestion = raw["next_jobs"][0]
+    with pytest.raises(ValueError, match="no scheduled job"):
+        resolve_schedule()
+
+
+def test_resolve_schedule_conflicting_crons_raises(jobs_path: Path) -> None:
+    """Two scheduled jobs with different crons fail — Airflow supports one schedule per DAG."""
+    # Arrange
+    jobs = _chain()
+    jobs.append(
+        {
+            "name": "DOWNLOAD-OTHER",
+            "source_name": "OTHER",
+            "job_type": "DOWNLOAD",
+            "schedule": "0 3 * * *",
+            "is_next_skipped_if_error": True,
+            "next_jobs": [],
+        }
+    )
+    jobs_path.write_text(json.dumps(jobs))
+
+    # Act & Assert
+    with pytest.raises(ValueError, match="different schedules"):
+        resolve_schedule()
+
+
+def test_jobs_json_shipped_registry_loads() -> None:
+    """The shipped jobs.json is a flat list of 46 uniquely named jobs."""
+    # Arrange & Act
+    jobs = load_jobs()
+
+    # Assert
+    assert len(jobs) == 46
+    names = [job.name for job in jobs]
+    assert len(names) == len(set(names))
+
+
+def test_jobs_json_every_source_chains_ingestion_data_quality_and_single_etl() -> None:
+    """Every source's DOWNLOAD reaches its INGESTION job, which fans out to a DATA_QUALITY job
+    on the same table and a SINGLE_ETL job on <table>_etl (the Union job is not a source chain)."""
+    # Arrange
+    jobs = {raw["name"]: raw for raw in _load_shipped()}
+
+    # Act & Assert
+    downloads = [raw for raw in jobs.values() if raw["job_type"] == "DOWNLOAD"]
+    assert downloads
+    for download in downloads:
+        source_name = download["source_name"]
+
+        (ingestion_name,) = download["next_jobs"]
+        ingestion = jobs[ingestion_name]
 
         assert ingestion["job_type"] == "INGESTION", source_name
         assert len(ingestion["next_jobs"]) == 2, source_name
 
-        data_quality = ingestion["next_jobs"][0]
+        data_quality_name, single_etl_name = ingestion["next_jobs"]
+        data_quality = jobs[data_quality_name]
 
         assert data_quality["job_type"] == "DATA_QUALITY", source_name
         assert data_quality["table_name"] == ingestion["table_name"], source_name
         assert data_quality["next_jobs"] == [], source_name
 
-
-def test_jobs_json_chains_single_etl_and_etl_data_quality() -> None:
-    """Every source chain in jobs.json chains SINGLE_ETL on the <table>_etl script under its INGESTION job,
-    followed by a DATA_QUALITY job on the same etl table (the bare `Union` entry is skipped)."""
-    # Arrange
-    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
-        sources = json.load(f)
-
-    # Act & Assert
-    for source_name, raw in sources.items():
-        if raw["job_type"] != "DOWNLOAD":
-            continue
-        ingestion = raw["next_jobs"][0]
         etl_table = f"{ingestion['table_name']}_etl"
-
-        assert ingestion["job_type"] == "INGESTION", source_name
-
-        single_etl = ingestion["next_jobs"][1]
+        single_etl = jobs[single_etl_name]
 
         assert single_etl["job_type"] == "SINGLE_ETL", source_name
         assert single_etl["table_name"] == etl_table, source_name
         assert len(single_etl["next_jobs"]) == 1, source_name
 
-        etl_data_quality = single_etl["next_jobs"][0]
+        (etl_data_quality_name,) = single_etl["next_jobs"]
+        etl_data_quality = jobs[etl_data_quality_name]
 
         assert etl_data_quality["job_type"] == "DATA_QUALITY", source_name
         assert etl_data_quality["table_name"] == etl_table, source_name
         assert etl_data_quality["next_jobs"] == [], source_name
 
 
-def test_jobs_json_every_job_stops_chain_without_failing_task() -> None:
-    """Every job in jobs.json keeps is_failed_if_error=false and is_stop_if_error=true.
-    The flags are documentation only — the DAG maps them to all_success trigger rules
-    (failed jobs skip their downstream jobs)."""
-    # Arrange
-    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
-        sources = json.load(f)
+def test_jobs_json_every_job_skips_next_jobs_on_error() -> None:
+    """Every job in jobs.json keeps is_next_skipped_if_error=true.
+    The flag is documentation only — the DAG maps it to the all_success trigger rule
+    (a failed job skips the jobs named in its next_jobs)."""
+    # Arrange & Act
+    jobs = _load_shipped()
 
-    # Act & Assert
-    for source_name, raw in sources.items():
-        stack = [raw]
-        while stack:
-            job = stack.pop()
-            location = f"{source_name}/{job['job_type']}"
-            assert job["is_failed_if_error"] is False, location
-            assert job["is_stop_if_error"] is True, location
-            stack.extend(job["next_jobs"])
+    # Assert
+    for job in jobs:
+        assert job["is_next_skipped_if_error"] is True, job["name"]
+
+
+def test_jobs_json_scheduled_jobs_are_the_downloads() -> None:
+    """In the shipped registry every DOWNLOAD job is scheduled and every other job is
+    downstreamed (no schedule)."""
+    # Arrange & Act
+    jobs = _load_shipped()
+
+    # Assert
+    for job in jobs:
+        if job["job_type"] == "DOWNLOAD":
+            assert job["schedule"] == "0 2 * * *", job["name"]
+        else:
+            assert "schedule" not in job, job["name"]
 
 
 def test_jobs_json_union_job_stacks_every_source_table() -> None:
-    """The `Union` entry is a bare SINGLE_ETL job on union_etl with the shipped failure flags —
-    the DAG turns it into the fan-in task every source chain waits for."""
-    # Arrange
-    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
-        union = json.load(f)["Union"]
+    """The Union job is a bare SINGLE_ETL job on union_etl — the DAG turns its root into
+    the fan-in task that waits for every source's single_etl task."""
+    # Arrange & Act
+    union = next(raw for raw in _load_shipped() if raw["source_name"] == "Union")
 
-    # Act & Assert
+    # Assert
     assert union == {
+        "name": "SINGLE_ETL-union_etl",
         "source_name": "Union",
         "job_type": "SINGLE_ETL",
         "table_name": "union_etl",
-        "is_failed_if_error": False,
-        "is_stop_if_error": True,
+        "is_next_skipped_if_error": True,
         "next_jobs": [],
     }
 
@@ -195,7 +352,7 @@ def test_jobs_json_union_job_stacks_every_source_table() -> None:
 def test_job_get_command_download() -> None:
     """A DOWNLOAD job builds the run_download.py command with the source name."""
     # Arrange
-    job = Job(source_name="NIFC", job_type=EJobType.DOWNLOAD)
+    job = Job(name="DOWNLOAD-NIFC", source_name="NIFC", job_type=EJobType.DOWNLOAD)
 
     # Act
     result = job.get_command()
@@ -209,7 +366,7 @@ def test_job_get_command_download() -> None:
 def test_job_get_command_ingestion() -> None:
     """An INGESTION job builds the run_etl.py command with the table name."""
     # Arrange
-    job = Job(source_name="NIFC", job_type=EJobType.INGESTION, table_name="nifc_fire")
+    job = Job(name="INGESTION-nifc_fire", source_name="NIFC", job_type=EJobType.INGESTION, table_name="nifc_fire")
 
     # Act
     result = job.get_command()
@@ -223,7 +380,7 @@ def test_job_get_command_ingestion() -> None:
 def test_job_get_command_ingestion_without_table_name_raises() -> None:
     """An INGESTION job without table_name raises ValueError."""
     # Arrange
-    job = Job(source_name="NIFC", job_type=EJobType.INGESTION)
+    job = Job(name="INGESTION-nifc_fire", source_name="NIFC", job_type=EJobType.INGESTION)
 
     # Act & Assert
     with pytest.raises(ValueError, match="no table_name"):
@@ -233,7 +390,7 @@ def test_job_get_command_ingestion_without_table_name_raises() -> None:
 def test_job_get_command_data_quality() -> None:
     """A DATA_QUALITY job builds the run_etl.py command with the plain table name."""
     # Arrange
-    job = Job(source_name="NIFC", job_type=EJobType.DATA_QUALITY, table_name="nifc_fire")
+    job = Job(name="DATA_QUALITY-nifc_fire", source_name="NIFC", job_type=EJobType.DATA_QUALITY, table_name="nifc_fire")
 
     # Act
     result = job.get_command()
@@ -247,7 +404,7 @@ def test_job_get_command_data_quality() -> None:
 def test_job_get_command_data_quality_without_table_name_raises() -> None:
     """A DATA_QUALITY job without table_name raises ValueError."""
     # Arrange
-    job = Job(source_name="NIFC", job_type=EJobType.DATA_QUALITY)
+    job = Job(name="DATA_QUALITY-nifc_fire", source_name="NIFC", job_type=EJobType.DATA_QUALITY)
 
     # Act & Assert
     with pytest.raises(ValueError, match="no table_name"):
@@ -257,7 +414,9 @@ def test_job_get_command_data_quality_without_table_name_raises() -> None:
 def test_job_get_command_single_etl() -> None:
     """A SINGLE_ETL job builds the run_etl.py command with the etl script name."""
     # Arrange
-    job = Job(source_name="NIFC", job_type=EJobType.SINGLE_ETL, table_name="nifc_fire_etl")
+    job = Job(
+        name="SINGLE_ETL-nifc_fire_etl", source_name="NIFC", job_type=EJobType.SINGLE_ETL, table_name="nifc_fire_etl"
+    )
 
     # Act
     result = job.get_command()
@@ -271,7 +430,7 @@ def test_job_get_command_single_etl() -> None:
 def test_job_get_command_single_etl_without_table_name_raises() -> None:
     """A SINGLE_ETL job without table_name raises ValueError."""
     # Arrange
-    job = Job(source_name="NIFC", job_type=EJobType.SINGLE_ETL)
+    job = Job(name="SINGLE_ETL-nifc_fire_etl", source_name="NIFC", job_type=EJobType.SINGLE_ETL)
 
     # Act & Assert
     with pytest.raises(ValueError, match="no table_name"):

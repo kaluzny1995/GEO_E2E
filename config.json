@@ -1,4 +1,25 @@
 {
+  "dag": {
+    "dag_id": "geo_pipeline",
+    "start_date": "2026-01-01",
+    "timezone": "Europe/Warsaw",
+    "catchup": false,
+    "max_active_runs": 1,
+    "tags": ["geo", "e2e"],
+    "retries": 0,
+    "execution_timeout_minutes": 30,
+    "union_source": "Union",
+    "pools": {
+      "download": "download",
+      "ingestion": "etl",
+      "data_quality": "etl",
+      "single_etl": "etl"
+    },
+    "pool_slots": {
+      "download": 3,
+      "etl": 2
+    }
+  },
   "job": {
     "download": {
       "folder_name": "GEO_Download",
