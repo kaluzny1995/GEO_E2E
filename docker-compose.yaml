@@ -3,12 +3,12 @@ x-airflow-common: &airflow-common
     context: .
     dockerfile: docker/airflow/Dockerfile
     args:
-      CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}
+      CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env.local (run ./setup.sh)}
   image: geo_airflow:3.3.2
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__CORE__DAGS_FOLDER: ${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}/GEO_E2E
+    AIRFLOW__CORE__DAGS_FOLDER: ${GEO_ROOT:?Set GEO_ROOT in .env.local (run ./setup.sh)}/GEO_E2E
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     # Create DAGs unpaused on first parse — no manual unpause in the UI needed
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
@@ -22,12 +22,12 @@ x-airflow-common: &airflow-common
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_HOME: /opt/airflow
     HOME: /opt/airflow
-    CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}
+    CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env.local (run ./setup.sh)}
   volumes:
     # Mounted at the same absolute path inside the container so conda env shebangs
-    # and sibling-project paths keep resolving — the values live only in .env (not in git)
-    - ${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}:${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}
-    - ${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}:${CONDA_ROOT:?Set CONDA_ROOT in .env to your conda base dir}
+    # and sibling-project paths keep resolving — the values live only in .env.local (not in git)
+    - ${GEO_ROOT:?Set GEO_ROOT in .env.local (run ./setup.sh)}:${GEO_ROOT:?Set GEO_ROOT in .env.local (run ./setup.sh)}
+    - ${CONDA_ROOT:?Set CONDA_ROOT in .env.local (run ./setup.sh)}:${CONDA_ROOT:?Set CONDA_ROOT in .env.local (run ./setup.sh)}
     - airflow_data:/opt/airflow
   user: "${AIRFLOW_UID:-50000}:0"
   network_mode: host
@@ -75,8 +75,8 @@ services:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: "true"
       _AIRFLOW_WWW_USER_CREATE: "true"
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:?Set _AIRFLOW_WWW_USER_USERNAME in .env (see .env.example)}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?Set _AIRFLOW_WWW_USER_PASSWORD in .env (see .env.example)}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:?Set _AIRFLOW_WWW_USER_USERNAME in .env.local (run ./setup.sh)}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?Set _AIRFLOW_WWW_USER_PASSWORD in .env.local (run ./setup.sh)}
     user: "0:0"
 
   airflow-dag-processor:

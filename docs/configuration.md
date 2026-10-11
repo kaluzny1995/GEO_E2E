@@ -273,7 +273,7 @@ The runtime knobs live in the `dag` block of `config.json`, loaded via pydantic 
 | `pools` | download/etl | Airflow pool per job type (`DOWNLOAD` → `download`, everything else → `etl`) |
 | `pool_slots` | 3 / 2 | Slot count per pool — seeded by `airflow-init` on every `docker compose up` via `docker/airflow/seed_pools.py` (idempotent) |
 
-You can inspect the pools under **Admin → Pools** or via `docker compose run --rm airflow-cli pools list`. The DAG itself is created unpaused (`dags_are_paused_at_creation=false` in `docker-compose.yaml`).
+You can inspect the pools under **Admin → Pools** or via `docker compose --env-file .env.local run --rm airflow-cli pools list`. The DAG itself is created unpaused (`dags_are_paused_at_creation=false` in `docker-compose.yaml`).
 
 ## Modifying the schedule
 

@@ -13,7 +13,7 @@ Each data source's jobs live in the flat `jobs.json` registry (one object per jo
 The system runs as Docker Compose services:
 
 1. **Airflow Scheduler** — triggers the `geo_pipeline` DAG daily at 02:00 (Europe/Warsaw) and runs its tasks (LocalExecutor).
-2. **Airflow API server + UI** — web UI at http://localhost:8090 (login: `airflow_admin` / `airflow_admin` from `.env`) for monitoring, manually triggering and re-running jobs.
+2. **Airflow API server + UI** — web UI at http://localhost:8090 (login: `airflow_admin` / `airflow_admin` from `.env.local`) for monitoring, manually triggering and re-running jobs.
 3. **Airflow DAG processor** — parses `geo_pipeline.py` into tasks.
 
 PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
@@ -84,7 +84,7 @@ flowchart TD
 - **Docker** — for the Airflow stack and the Spark cluster
 - **GEO_Download** — must be a sibling directory (i.e. `../GEO_Download/`) with the `geo_download_311` conda env created, since downloads run there
 - **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion, single-ETL and data-quality runs happen there
-- **Spark cluster** — must be up (`docker compose up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion, single-ETL and data-quality jobs can connect
+- **Spark cluster** — must be up (`docker compose --env-file .env.local up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion, single-ETL and data-quality jobs can connect
 
 ## Setup
 
@@ -111,13 +111,15 @@ conda env create -f ../GEO_ETL/environment.yml        # geo_etl_311
 
 ### 2. Configure environment variables (mandatory)
 
-**Mandatory before the first `docker compose` command** — create the `.env` file in this directory by copying the committed template and adjusting the values:
+**Mandatory before the first `docker compose` command** — run the bootstrap script once per checkout; it derives the machine paths from this clone and writes the git-ignored `.env.local`:
 
 ```bash
-cp .env.example .env   # then edit the six values
+./setup.sh            # --force to regenerate, --help for the flags
 ```
 
-`.env` defines the machine-specific paths, uid and the Airflow UI login — **the only place where your real values live** (`.env` is git-ignored; the compose file and the rest of the repo contain only variable references, no private paths or credentials):
+It prompts for the Airflow UI login (defaults `airflow_admin` / `airflow_admin` when stdin is not a TTY) and echoes the detected `GEO_ROOT`, `CONDA_ROOT` and `AIRFLOW_UID`. Run inside a Docker container it is non-interactive and writes `.env.docker` instead of `.env.local`. Manual fallback: `cp .env.example .env.local` and adjust the six values.
+
+`.env.local` defines the machine-specific paths, uid and the Airflow UI login — **the only place where your real values live** (`.env.local` is git-ignored; the compose file and the rest of the repo contain only variable references, no private paths or credentials). Compose does not auto-load that filename, so every command below carries `--env-file .env.local`:
 
 ```
 GEO_DATA_DIR=<GEO_ROOT>/GEO_Download/data
@@ -128,12 +130,12 @@ _AIRFLOW_WWW_USER_USERNAME=<airflow_username>
 _AIRFLOW_WWW_USER_PASSWORD=<airflow_password>
 ```
 
-> **Important:** `docker compose` refuses to start with a clear error when `GEO_ROOT`, `CONDA_ROOT` or the two `_AIRFLOW_WWW_USER_*` credentials are missing — all are required: the sibling projects and conda are bind-mounted **at their host paths** inside the containers so that `conda run -n <env>` (absolute env shebangs) and the `cd ..;cd GEO_*` commands keep resolving, and `airflow-init` creates the web UI admin user from the credentials.
+> **Important:** `docker compose --env-file .env.local` refuses to start with a clear error when `GEO_ROOT`, `CONDA_ROOT` or the two `_AIRFLOW_WWW_USER_*` credentials are missing — all are required: the sibling projects and conda are bind-mounted **at their host paths** inside the containers so that `conda run -n <env>` (absolute env shebangs) and the `cd ..;cd GEO_*` commands keep resolving, and `airflow-init` creates the web UI admin user from the credentials.
 
 ### 3. Start services with Docker Compose
 
 ```bash
-docker compose up -d --build
+docker compose --env-file .env.local up -d --build
 ```
 
 This starts:
@@ -149,7 +151,7 @@ This starts:
 | Spark Worker 1 | – | Spark worker (2 cores, 2g RAM); its web UI (8084) is container-internal only |
 | Spark Worker 2 | – | Spark worker (2 cores, 2g RAM); its web UI (8085) is container-internal only |
 
-**Airflow UI:** http://localhost:8090 (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env`)
+**Airflow UI:** http://localhost:8090 (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env.local`)
 **Spark Web UI:** http://localhost:8083
 
 > The Airflow containers use `network_mode: host`, so task subprocesses reach the Spark master at `spark://localhost:7078` (the address in `../GEO_ETL/config.json`) and your host conda envs via their bind-mounted absolute paths. Postgres stays on the bridge network with host port `5472` — Airflow reaches it at `127.0.0.1:5472`.
@@ -161,7 +163,7 @@ Two one-time UI steps are automated:
 - **Pools** — `airflow-init` seeds them on every start (idempotent): `download` = 3 slots, `etl` = 2 slots.
 - **Unpausing** — `dags_are_paused_at_creation=false`, so `geo_pipeline` is created **unpaused** on first parse and runs daily at 02:00 (Europe/Warsaw).
 
-Verify in the UI at http://localhost:8090 → **DAGs** (the toggle is on) or via `docker compose run --rm airflow-cli pools list` / `dags list`. You can also trigger a run manually via **Trigger DAG**.
+Verify in the UI at http://localhost:8090 → **DAGs** (the toggle is on) or via `docker compose --env-file .env.local run --rm airflow-cli pools list` / `dags list`. You can also trigger a run manually via **Trigger DAG**.
 
 ### 5. Verify directory structure
 
@@ -178,8 +180,9 @@ GeographicData/
 │   └── ...
 ├── GEO_E2E/                # This project (orchestrator + Docker Compose)
 │   ├── docker-compose.yaml
-│   ├── .env.example        # Template for the machine-specific .env (committed)
-│   ├── .env                # Machine-specific paths (not in git)
+│   ├── .env.example        # Template for the machine-specific .env.local (committed)
+│   ├── .env.local          # Machine-specific paths (written by ./setup.sh, not in git)
+│   ├── setup.sh            # Bootstrap: writes .env.local with this checkout's paths
 │   ├── config.json         # Command templates per job type
 │   ├── jobs.json           # Job chains per data source
 │   ├── model.py            # Config models + build_task_specs()
@@ -206,11 +209,11 @@ GeographicData/
 Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-docker compose up -d --build              # build the Airflow image, start the stack
-docker compose logs -f airflow-scheduler  # follow the scheduler (task execution)
+docker compose --env-file .env.local up -d --build              # build the Airflow image, start the stack
+docker compose --env-file .env.local logs -f airflow-scheduler  # follow the scheduler (task execution)
 ```
 
-Open **http://localhost:8090** (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env`) to watch the `geo_pipeline` grid, re-run failed tasks (**Clear**), inspect task logs, trigger a run manually (**Trigger DAG**) or pause/unpause the schedule (**Active/Paused** toggle on the **DAGs** page). The DAG is unpaused from the start and the pools are pre-seeded (see [Setup](#4-nothing-else-to-configure--pools-and-unpausing-are-automatic)) — no post-install clicks required.
+Open **http://localhost:8090** (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env.local`) to watch the `geo_pipeline` grid, re-run failed tasks (**Clear**), inspect task logs, trigger a run manually (**Trigger DAG**) or pause/unpause the schedule (**Active/Paused** toggle on the **DAGs** page). The DAG is unpaused from the start and the pools are pre-seeded (see [Setup](#4-nothing-else-to-configure--pools-and-unpausing-are-automatic)) — no post-install clicks required.
 
 See [Usage](docs/usage.md) for manual triggers, log locations and example output.
 

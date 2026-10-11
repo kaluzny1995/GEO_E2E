@@ -8,9 +8,10 @@
 GEO_E2E/
 ├── README.md                 # Overview, setup and quick start
 ├── docker-compose.yaml       # Airflow stack (Postgres, init, scheduler, API server, DAG processor) + Spark cluster
-├── .env.example              # Template for the machine-specific .env (committed)
-├── .env                      # Machine-specific paths (not in git)
-├── .gitignore                # Excludes .env, logs/, __pycache__, .tox, IDE files
+├── .env.example              # Template for the machine-specific .env.local (committed)
+├── .env.local                # Machine-specific paths (written by ./setup.sh, not in git)
+├── setup.sh                  # Bootstrap: writes .env.local (+ login) from this checkout; in a container writes .env.docker
+├── .gitignore                # Excludes .env, .env.local, .env.docker, logs/, __pycache__, .tox, IDE files
 ├── config.json               # Job config (command templates per job type)
 ├── jobs.json                 # Flat job registry: one object per job, next_jobs = name references
 ├── model.py                  # Pydantic models: JobConfig, Job, TaskSpec, build_task_specs()
@@ -44,6 +45,7 @@ GEO_E2E/
 | `config.json` | Command templates for `DOWNLOAD`/`INGESTION`/`DATA_QUALITY`/`SINGLE_ETL` (folder, script, conda env) |
 | `jobs.json` | Flat job list — one object per job (`name`, `job_type`, `next_jobs` as name references) — plus the `Union` job |
 | `docker-compose.yaml` | Airflow services (`network_mode: host`, Postgres on host port `5472`, UI on `8090`) plus the Spark cluster |
+| `setup.sh` | Writes the git-ignored `.env.local` once per checkout — `GEO_ROOT`/`GEO_DATA_DIR` from the clone's location, `CONDA_ROOT` from `conda info --base`, `AIRFLOW_UID` from `id -u`, plus the Airflow UI login (`--force` keeps the existing one); compose reads it via `--env-file .env.local` |
 | `docker/airflow/Dockerfile` | Extends `apache/airflow:3.3.2-python3.11` with `apache-airflow-providers-standard`, `psutil`, `pydantic` (pinned to the Airflow constraints) and a `conda` symlink to the host conda (bind-mounted at runtime) |
 
 ## How it works
