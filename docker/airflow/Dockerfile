@@ -19,7 +19,7 @@ RUN ln -s "${CONDA_ROOT}/bin/conda" /usr/local/bin/conda
 
 USER airflow
 
-# Dependencies of model.py / util.py / dags/geo_pipeline.py, pinned to the Airflow 3.3.2 constraints
+# Dependencies of model.py / util.py / geo_pipeline.py, pinned to the Airflow 3.3.2 constraints
 RUN pip install --no-cache-dir \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.11.txt" \
     "apache-airflow-providers-standard==1.19.0" \

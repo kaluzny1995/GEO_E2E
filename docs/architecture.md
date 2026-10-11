@@ -14,12 +14,13 @@ GEO_E2E/
 ├── config.json               # Job config (command templates per job type)
 ├── jobs.json                 # Flat job registry: one object per job, next_jobs = name references
 ├── model.py                  # Pydantic models: JobConfig, Job, TaskSpec, build_task_specs()
+├── geo_dag.py                # JobsSubDAG + GEO_DAG: task specs grouped per source and rendered into the Airflow DAG
+├── geo_pipeline.py           # The Airflow DAG — the @dag wrapper around geo_dag.GEO_DAG
 ├── util.py                   # Memory logging helpers (Airflow task callbacks)
-├── environment.yml           # Conda environment definition (Python, ruff/tox/mypy, pinned Airflow for dags/)
+├── .airflowignore            # Airflow scans the project root: only geo_pipeline.py counts as a DAG file
+├── environment.yml           # Conda environment definition (Python, ruff/tox/mypy, pinned Airflow for the DAG file)
 ├── pyproject.toml            # Ruff rules, formatter style, mypy files and pytest options
 ├── tox.ini                   # lint / test / typecheck / format / warnings environments
-├── dags/
-│   └── geo_pipeline.py       # The Airflow DAG — maps TaskSpecs to BashOperators
 ├── docker/
 │   └── airflow/
 │       ├── Dockerfile        # apache/airflow:3.3.2 + providers-standard, psutil, pydantic, conda symlink
@@ -28,6 +29,7 @@ GEO_E2E/
 └── test/                     # Unit tests
     ├── __init__.py
     ├── test_dags.py          # build_task_specs(): task ids, wiring, union fan-in
+    ├── test_geo_pipeline.py  # JobsSubDAG / GEO_DAG: subDAGs, the rendered mega-DAG, the union fan-in
     ├── test_jobs.py          # Job chains from jobs.json + command building
     ├── test_models.py        # JobTypeConfig, JobConfig, get_job_config()
     └── test_util.py          # memory helpers
@@ -35,7 +37,8 @@ GEO_E2E/
 
 | File | Responsibility |
 |------|----------------|
-| `dags/geo_pipeline.py` | The `geo_pipeline` DAG: builds one `BashOperator` per `TaskSpec` and wires the upstream dependencies; the cron comes from the scheduled jobs of `jobs.json`, the runtime knobs (retries, timeout, pools) from the `dag` block of `config.json` |
+| `geo_pipeline.py` | The `geo_pipeline` DAG: the `@dag` wrapper around `geo_dag.GEO_DAG` — supplies the DAG keywords (`geo_dag.GEO_DAG.dag_kwargs()`) and renders the tasks (`geo_dag.GEO_DAG.to_airflow()`); the cron comes from the scheduled jobs of `jobs.json`, the runtime knobs (retries, timeout, pools) from the `dag` block of `config.json` |
+| `geo_dag.py` | `JobsSubDAG` (one `jobs.json` chain — a source or the union — as `BashOperator`s, wired internally) and `GEO_DAG` (groups the specs by source into the nine source subDAGs + the union subDAG, wires the cross-subDAG union fan-in and carries the `@dag` keywords) |
 | `model.py` | Pydantic models: `JobTypeConfig`, `JobConfig`, `JobTypeConfig`, `Job`, `EJobType`, `TaskSpec`, plus `get_job_config()`, `load_chains()` and `build_task_specs()` |
 | `util.py` | `get_memory_info()` and `log_memory_usage()` — used as `on_success_callback` / `on_failure_callback` of every task |
 | `config.json` | Command templates for `DOWNLOAD`/`INGESTION`/`DATA_QUALITY`/`SINGLE_ETL` (folder, script, conda env) |
@@ -45,9 +48,9 @@ GEO_E2E/
 
 ## How it works
 
-1. The Airflow scheduler triggers the `geo_pipeline` DAG on the cron declared by the **scheduled jobs** in `jobs.json` (the nine `DOWNLOAD` roots, all `0 2 * * *` — `model.resolve_schedule()` requires them to agree, since Airflow schedules whole DAGs; `catchup`/`max_active_runs`/timezone come from the `dag` block of `config.json`). Downstreamed jobs (no `schedule`) start when their parent finishes. The DAG is created unpaused on first parse (`dags_are_paused_at_creation=false`), and the `download`/`etl` pools are seeded by `airflow-init` from `dag.pool_slots` (`docker/airflow/seed_pools.py`) on every `docker compose up`.
-2. At DAG-parse time, `dags/geo_pipeline.py` calls `model.build_task_specs()`, which loads every chain from `jobs.json` and flattens it into `TaskSpec`s — one per job, with the task id taken from the job-type path inside the chain (`NIFC.download`, `NIFC.ingestion`, `NIFC.ingestion.single_etl.data_quality`, …) and the shell command built from the `job` block of `config.json` — for `DOWNLOAD`: `cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py <source_name>`.
-3. The DAG file maps every spec to a `BashOperator` (`cwd` = the GEO_E2E directory, so the `cd ..;cd GEO_*` commands resolve the sibling projects) and wires each spec's `upstream` task ids via `set_upstream`. Tasks with `next_jobs` use the default `all_success` trigger rule; the union root uses `all_done_min_one_success`.
+1. The Airflow scheduler triggers the `geo_pipeline` DAG on the cron declared by the **scheduled jobs** in `jobs.json` (the nine `DOWNLOAD` roots, all `0 2 * * *` — `model.resolve_schedule()` requires them to agree, since Airflow schedules whole DAGs; `catchup`/`max_active_runs`/timezone come from the `dag` block of `config.json`). Downstreamed jobs (no `schedule`) start when their parent finishes. The DAG is created unpaused on first parse (`dags_are_paused_at_creation=false`), and the `download`/`etl` pools are seeded by `airflow-init` from `dag.pool_slots` (`docker/airflow/seed_pools.py`) on every `docker compose up`. The DAGs folder is the whole `GEO_E2E` directory (`AIRFLOW__CORE__DAGS_FOLDER` in `docker-compose.yaml`) and `.airflowignore` excludes everything else from the scan, so `geo_pipeline.py` is the only file parsed as a DAG.
+2. At DAG-parse time, `geo_pipeline.py` calls `model.build_task_specs()`, which loads every chain from `jobs.json` and flattens it into `TaskSpec`s — one per job, with the task id taken from the job-type path inside the chain (`NIFC.download`, `NIFC.ingestion`, `NIFC.ingestion.single_etl.data_quality`, …) and the shell command built from the `job` block of `config.json` — for `DOWNLOAD`: `cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py <source_name>`.
+3. `geo_pipeline.py` delegates the conversion to `geo_dag.GEO_DAG`: it groups the specs by `source_name` into ten `geo_dag.JobsSubDAG`s (the nine source chains in `jobs.json` order, then the union chain), every subDAG creates one `BashOperator` per spec (`cwd` = the GEO_E2E directory, so the `cd ..;cd GEO_*` commands resolve the sibling projects, pool by job type, trigger rule from the spec) and wires the dependencies **inside** itself; `GEO_DAG.to_airflow()` then wires the one dependency **between** subDAGs — the union fan-in. Tasks with `next_jobs` use the default `all_success` trigger rule; the union root uses `all_done_min_one_success`.
 4. At run time the scheduler (LocalExecutor) executes each task as a subprocess inside the scheduler container: `conda` is on the image's `PATH` (symlink to the bind-mounted host conda), and the `geo_download_311` / `geo_etl_311` envs are found at their absolute host paths.
 5. Concurrency is capped by pools: `DOWNLOAD` tasks go to the `download` pool (3 slots), every other job type to the `etl` pool (2 slots) — so at most 3 downloads and 2 Spark ETL jobs run at once.
 6. Each task's stdout/stderr is captured as the Airflow task log (viewable in the web UI). On success **and** failure the memory callback appends `NIFC.download Memory: X out of Y GiB (Z %) used`.
@@ -59,7 +62,7 @@ GEO_E2E/
 
 ## Execution model
 
-The end-to-end diagram lives in the [README — Workflow](../README.md#workflow). At runtime Airflow sees 46 tasks of one DAG: 9 sources × 5 chain tasks + 1 union fan-in task. A failed task shows up red in the grid, its descendants grey/skipped, and the union task still runs (`all_done_min_one_success`) as long as at least one single-ETL succeeded. Manual re-runs are done in the web UI (**Clear** the failed task), not via marker files.
+The end-to-end diagram lives in the [README — Workflow](../README.md#workflow). At runtime Airflow sees 47 tasks of one DAG: 9 sources × 5 chain tasks + the union chain (`Union.single_etl` and its `DATA_QUALITY union_etl` child), built from ten code-level subDAGs. A failed task shows up red in the grid, its descendants grey/skipped, and the union task still runs (`all_done_min_one_success`) as long as at least one single-ETL succeeded. Manual re-runs are done in the web UI (**Clear** the failed task), not via marker files.
 
 ## Failure handling
 

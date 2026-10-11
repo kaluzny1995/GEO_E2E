@@ -6,15 +6,15 @@ GIS Data End-to-End Pipeline — an Apache Airflow-based orchestrator that runs 
 
 GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it defines one Airflow DAG (`geo_pipeline`) whose tasks spawn subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality`, `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
 
-A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `ingestion.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The DATA_QUALITY jobs are terminal steps with no successors (like in the old Celery chains).
+A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `ingestion.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The union chain then runs `DATA_QUALITY union_etl` to measure the freshly stacked table. Every DATA_QUALITY job is a terminal step with no successors (like in the old Celery chains).
 
-Each data source's jobs live in the flat `jobs.json` registry (one object per job; `next_jobs` references the dependent jobs by `name`, same pattern as E2EReddit). `model.build_task_specs()` validates the registry and resolves it into Airflow tasks (`dags/geo_pipeline.py` maps the specs to `BashOperator`s), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
+Each data source's jobs live in the flat `jobs.json` registry (one object per job; `next_jobs` references the dependent jobs by `name`, same pattern as E2EReddit). `model.build_task_specs()` validates the registry and resolves it into Airflow task specs, which `geo_dag.GEO_DAG` groups into ten code-level subDAGs — one `geo_dag.JobsSubDAG` per source chain plus the union chain — and renders into `BashOperator`s of the single mega-DAG (`geo_pipeline.py` is only its `@dag` wrapper), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
 
 The system runs as Docker Compose services:
 
 1. **Airflow Scheduler** — triggers the `geo_pipeline` DAG daily at 02:00 (Europe/Warsaw) and runs its tasks (LocalExecutor).
 2. **Airflow API server + UI** — web UI at http://localhost:8090 (login: `airflow_admin` / `airflow_admin` from `.env`) for monitoring, manually triggering and re-running jobs.
-3. **Airflow DAG processor** — parses `dags/geo_pipeline.py` into tasks.
+3. **Airflow DAG processor** — parses `geo_pipeline.py` into tasks.
 
 PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
 
@@ -34,7 +34,7 @@ PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped b
 
 ```mermaid
 flowchart TD
-    A[jobs.json] -->|build_task_specs| B[dags/geo_pipeline.py]
+    A[jobs.json] -->|build_task_specs| B[geo_pipeline.py]
     B -->|schedule 02:00 Europe/Warsaw| C[Airflow Scheduler]
     C -->|pool: download (3 slots)| D[NIFC.download ... USGS_Earthquake.download]
     D -->|all_success| E[...ingestion]
@@ -48,6 +48,7 @@ flowchart TD
     I -->|CSV| J[GEO_Download/run_download.py]
     E -->|JDBC + Spark| K[GEO_ETL/run_etl.py INGESTION / DATA_QUALITY / SINGLE_ETL]
     U -->|JDBC + Spark| L[geo.union_etl]
+    U -->|all_success| UQ[Union data quality]
     C -->|task logs| M[http://localhost:8090]
 ```
 
@@ -141,7 +142,7 @@ This starts:
 |---------|-------|---------|
 | `airflow-postgres` | 5472 | Airflow metadata database |
 | `airflow-init` | – | One-shot: DB migration, admin user creation (exits 0) |
-| `airflow-dag-processor` | – | Parses `dags/geo_pipeline.py` |
+| `airflow-dag-processor` | – | Parses `geo_pipeline.py` |
 | `airflow-scheduler` | – | Triggers the DAG and runs its tasks (LocalExecutor) |
 | `airflow-api-server` | 8090 | Airflow REST API + web UI |
 | Spark Master | 7078, 8083 | Spark cluster master |
@@ -182,9 +183,10 @@ GeographicData/
 │   ├── config.json         # Command templates per job type
 │   ├── jobs.json           # Job chains per data source
 │   ├── model.py            # Config models + build_task_specs()
+│   ├── geo_dag.py          # JobsSubDAG + GEO_DAG (task specs -> Airflow DAG)
+│   ├── geo_pipeline.py     # The Airflow DAG (geo_pipeline)
+│   ├── .airflowignore      # only geo_pipeline.py counts as a DAG file
 │   ├── util.py             # Memory logging helpers
-│   ├── dags/
-│   │   └── geo_pipeline.py # The Airflow DAG (geo_pipeline)
 │   ├── docker/
 │   │   └── airflow/
 │   │       └── Dockerfile # Airflow image (providers + psutil + pydantic)

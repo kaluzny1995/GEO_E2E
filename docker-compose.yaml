@@ -8,7 +8,7 @@ x-airflow-common: &airflow-common
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__CORE__DAGS_FOLDER: ${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}/GEO_E2E/dags
+    AIRFLOW__CORE__DAGS_FOLDER: ${GEO_ROOT:?Set GEO_ROOT in .env to the GeographicData dir}/GEO_E2E
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     # Create DAGs unpaused on first parse — no manual unpause in the UI needed
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"

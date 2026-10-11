@@ -2,7 +2,7 @@
 
 # Configuration Reference
 
-`config.json` defines **how** each job type is executed (the `job` block) and holds the DAG-level runtime knobs (the `dag` block: retries, pools, ...); `jobs.json` defines **which** jobs each source runs, how they depend on each other, and which of them are scheduled (each scheduled job carries its own `schedule`). The DAG file `dags/geo_pipeline.py` only turns those configs into Airflow tasks.
+`config.json` defines **how** each job type is executed (the `job` block) and holds the DAG-level runtime knobs (the `dag` block: retries, pools, ...); `jobs.json` defines **which** jobs each source runs, how they depend on each other, and which of them are scheduled (each scheduled job carries its own `schedule`). The DAG file `geo_pipeline.py` only turns those configs into Airflow tasks.
 
 ## Job Config (`config.json`)
 
@@ -129,23 +129,34 @@ Each job becomes one Airflow task whose id follows the job-type path walked from
 | `SINGLE_ETL` | `NIFC.ingestion.single_etl` |
 | etl-table `DATA_QUALITY` | `NIFC.ingestion.single_etl.data_quality` |
 | union fan-in | `Union.single_etl` |
+| union data quality | `Union.single_etl.data_quality` |
 
 ### Union job (`Union`)
 
-Besides the nine source chains, `jobs.json` holds a bare `Union` entry — the fan-in job that stacks every `*_etl` table into `geo.union_etl`:
+Besides the nine source chains, `jobs.json` holds a `Union` entry — the fan-in job that stacks every `*_etl` table into `geo.union_etl`, followed by its `DATA_QUALITY` job:
 
 ```json
-{
-  "name": "SINGLE_ETL-union_etl",
-  "source_name": "Union",
-  "job_type": "SINGLE_ETL",
-  "table_name": "union_etl",
-  "is_next_skipped_if_error": true,
-  "next_jobs": []
-}
+[
+  {
+    "name": "SINGLE_ETL-union_etl",
+    "source_name": "Union",
+    "job_type": "SINGLE_ETL",
+    "table_name": "union_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": ["DATA_QUALITY-union_etl"]
+  },
+  {
+    "name": "DATA_QUALITY-union_etl",
+    "source_name": "Union",
+    "job_type": "DATA_QUALITY",
+    "table_name": "union_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  }
+]
 ```
 
-`SINGLE_ETL union_etl` stacks the nine `*_etl` tables into `geo.union_etl` (see [GEO_ETL — union_etl](../../GEO_ETL/docs/etl_jobs/single-etl.md#union_etl)); a non-zero exit — e.g. nothing newer to stack — fails the task (visible in the UI, re-runnable). The DAG gives the union root the `all_done_min_one_success` trigger rule and the nine `ingestion.single_etl` tasks as upstreams: it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded; when all nine failed, the scheduler marks it `upstream_failed` without running it. No markers, no polling, no deadline. The DATA_QUALITY jobs are not part of the fan-in: they stay terminal steps with no successors, like in the old Celery chains. A `DATA_QUALITY union_etl` step can be chained via `next_jobs` to measure the union table after it was rebuilt.
+`SINGLE_ETL union_etl` stacks the nine `*_etl` tables into `geo.union_etl` (see [GEO_ETL — union_etl](../../GEO_ETL/docs/etl_jobs/single-etl.md#union_etl)); a non-zero exit — e.g. nothing newer to stack — fails the task (visible in the UI, re-runnable). The DAG gives the union root the `all_done_min_one_success` trigger rule and the nine `ingestion.single_etl` tasks as upstreams: it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded; when all nine failed, the scheduler marks it `upstream_failed` without running it. No markers, no polling, no deadline. It is then followed by `DATA_QUALITY union_etl`, which measures `geo.union_etl` right after the stack. The DATA_QUALITY jobs are not part of the fan-in: they stay terminal steps with no successors, like in the old Celery chains.
 
 ### Data quality step
 
@@ -171,11 +182,11 @@ Each source additionally uses the etl table `<table>_etl` (e.g. `nifc_fire_etl`)
 
 ## Constructing the DAG
 
-You never write Airflow code to add or reshape work — you edit `jobs.json`. On every parse, `model.build_task_specs()` resolves the flat registry into one task spec per job, and `dags/geo_pipeline.py` turns each spec into an operator:
+You never write Airflow code to add or reshape work — you edit `jobs.json`. On every parse, `model.build_task_specs()` resolves the flat registry into one task spec per job, and `geo_pipeline.py` turns each spec into an operator:
 
 1. **`jobs.json`** — the source of truth: every job as one object — either *scheduled* (carries a `schedule`, starts the pipeline on that cron) or *downstreamed* (no `schedule`, starts when the job referencing it in `next_jobs` finishes).
 2. **`build_task_specs()`** — validates the registry (unique names, resolvable references, one parent per job, no cycles, scheduled jobs are roots sharing one cron), then produces one `TaskSpec` per job: the task id (job-type path), the shell command (from `config.json`), the upstream list (the parent job) and the trigger rule (`all_success`; `all_done_min_one_success` only for the union root). `resolve_schedule()` returns the cron the scheduled jobs share — the DAG's schedule.
-3. **`dags/geo_pipeline.py`** — a `BashOperator` per spec (pool by job type, trigger rule, retries/timeout from the `dag` block, memory callbacks) plus `set_upstream()` for every entry in `upstream`.
+3. **`geo_dag.py` + `geo_pipeline.py`** — `GEO_DAG` groups the specs by source into ten `JobsSubDAG`s (nine source chains + the union chain), renders each one into a `BashOperator` per spec (pool by job type, trigger rule, retries/timeout from the `dag` block, memory callbacks), wires the dependencies inside each subDAG and the union fan-in between them; `geo_pipeline.py` only applies `GEO_DAG.dag_kwargs()` through `@dag(...)` and calls `GEO_DAG.to_airflow()`.
 
 ### Placing a job
 
@@ -207,38 +218,12 @@ The `Union` job is not a normal source. Its root (`Union.single_etl`) is the onl
 
 - Adding or removing a source chain needs no edit to `SINGLE_ETL-union_etl`; the fan-in follows the chains in `jobs.json`.
 - The union starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — **but only if at least one of them succeeded**. When all nine failed, the scheduler marks it `upstream_failed` without running it (nothing fresh to stack); when all nine are skipped, it is skipped as well. The `DATA_QUALITY` jobs are terminal steps with no successors and are deliberately not part of the fan-in.
-- Jobs referenced from the union root (none today) wait for it with the normal `all_success` rule.
+- Jobs referenced from the union root wait for it with the normal `all_success` rule (shipped: `DATA_QUALITY-union_etl`, the union chain's last job).
 - `jobs.json` must always contain the `Union` job — `build_task_specs()` raises `ValueError` at parse time otherwise, which surfaces as a DAG import error in the UI until it is back.
 
-### Worked example: an extra step under the union
+### Adding a step under the union
 
-To measure the union table after it was rebuilt, add a `DATA_QUALITY` job on `union_etl` and reference it from the union job:
-
-```json
-{
-  "name": "DATA_QUALITY-union_etl",
-  "source_name": "Union",
-  "job_type": "DATA_QUALITY",
-  "table_name": "union_etl",
-  "is_next_skipped_if_error": true,
-  "next_jobs": []
-}
-```
-
-…and change the union job's reference list:
-
-```json
-{
-  "name": "SINGLE_ETL-union_etl",
-  "source_name": "Union",
-  "job_type": "SINGLE_ETL",
-  "table_name": "union_etl",
-  "is_next_skipped_if_error": true,
-  "next_jobs": ["DATA_QUALITY-union_etl"]
-}
-```
-
-This adds the task `Union.single_etl.data_quality`, waits for `Union.single_etl` with `all_success` and runs in the `etl` pool — no change to `dags/geo_pipeline.py` or `model.py` needed.
+The shipped registry already chains a `DATA_QUALITY` job under the union root (`DATA_QUALITY-union_etl`, referenced from `SINGLE_ETL-union_etl.next_jobs` → the task `Union.single_etl.data_quality`). Further steps follow the same recipe: add the job object and reference it from the union job's `next_jobs` — the new task waits for its parent with `all_success` and runs in the `etl` pool, no change to `geo_pipeline.py`, `geo_dag.py` or `model.py` needed.
 
 ### Validating a change
 
@@ -248,7 +233,7 @@ This adds the task `Union.single_etl.data_quality`, waits for `Union.single_etl`
 
 ## DAG settings (`config.json` → `dag` block)
 
-The runtime knobs live in the `dag` block of `config.json`, loaded via pydantic (`model.DagSettings` / `get_dag_settings()`); `dags/geo_pipeline.py` consumes it and hardcodes nothing. The cron itself is **not** here — it lives on the scheduled jobs in `jobs.json` (see [Modifying the schedule](#modifying-the-schedule)):
+The runtime knobs live in the `dag` block of `config.json`, loaded via pydantic (`model.DagSettings` / `get_dag_settings()`); `geo_pipeline.py` consumes it and hardcodes nothing. The cron itself is **not** here — it lives on the scheduled jobs in `jobs.json` (see [Modifying the schedule](#modifying-the-schedule)):
 
 ```json
 "dag": {

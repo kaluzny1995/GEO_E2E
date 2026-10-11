@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -66,51 +65,33 @@ def test_union_waits_for_every_single_etl_and_needs_a_success() -> None:
     """The union root waits for the SINGLE_ETL task of all nine sources with
     all_done_min_one_success: it starts whatever the chains' results, but only when at least
     one single-ETL succeeded (nothing fresh to stack otherwise) — the DATA_QUALITY jobs stay
-    terminal with no successors (the fan-in does not include them)."""
+    outside the fan-in (the fan-in does not include them)."""
     # Arrange & Act
-    union_specs = [spec for spec in build_task_specs() if spec.source_name == "Union"]
-    union_root = union_specs[0]
+    union_specs = {spec.task_id: spec for spec in build_task_specs() if spec.source_name == "Union"}
+    union_root = union_specs["Union.single_etl"]
 
     # Assert
-    assert union_root.task_id == "Union.single_etl"
     assert union_root.trigger_rule == "all_done_min_one_success"
     assert set(union_root.upstream) == _expected_fan_in()
     assert len(union_root.upstream) == 9
-    assert len(union_specs) == 1  # Union is a bare SINGLE_ETL job — no children
+    assert set(union_specs) == {"Union.single_etl", "Union.single_etl.data_quality"}
 
 
 def test_only_the_union_root_uses_all_done_min_one_success() -> None:
-    """all_done_min_one_success is reserved for the union specs — regular jobs always run
-    when their parent succeeded."""
+    """all_done_min_one_success is reserved for the union root — every other task, the union
+    data-quality step included, runs when its parent succeeded."""
     # Arrange & Act
-    specs = build_task_specs()
+    specs = {spec.task_id: spec for spec in build_task_specs()}
 
     # Assert
-    union_specs = [spec for spec in specs if spec.source_name == "Union"]
-    assert all(spec.trigger_rule == "all_done_min_one_success" for spec in union_specs)
-    assert all(spec.trigger_rule == "all_success" for spec in specs if spec.source_name != "Union")
+    assert specs["Union.single_etl"].trigger_rule == "all_done_min_one_success"
+    assert all(spec.trigger_rule == "all_success" for task_id, spec in specs.items() if task_id != "Union.single_etl")
 
 
-def test_union_children_keep_all_success(tmp_path: Path) -> None:
-    """Jobs chained under the union root (if ever added) wait for it with all_success."""
-    # Arrange
-    jobs = _load_jobs()
-    jobs.append(
-        {
-            "name": "DATA_QUALITY-union_etl",
-            "source_name": "Union",
-            "job_type": "DATA_QUALITY",
-            "table_name": "union_etl",
-            "is_next_skipped_if_error": True,
-            "next_jobs": [],
-        }
-    )
-    union = next(raw for raw in jobs if raw["source_name"] == "Union")
-    union["next_jobs"] = ["DATA_QUALITY-union_etl"]
-
-    # Act
-    with patch("model._JOBS_PATH", str(_write_jobs(tmp_path, jobs))):
-        specs = {spec.task_id: spec for spec in build_task_specs()}
+def test_union_children_keep_all_success() -> None:
+    """The shipped DATA_QUALITY job chained under the union root waits for it with all_success."""
+    # Arrange & Act
+    specs = {spec.task_id: spec for spec in build_task_specs()}
 
     # Assert
     child = specs["Union.single_etl.data_quality"]

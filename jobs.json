@@ -428,6 +428,16 @@
     "job_type": "SINGLE_ETL",
     "table_name": "union_etl",
     "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "DATA_QUALITY-union_etl"
+    ]
+  },
+  {
+    "name": "DATA_QUALITY-union_etl",
+    "source_name": "Union",
+    "job_type": "DATA_QUALITY",
+    "table_name": "union_etl",
+    "is_next_skipped_if_error": true,
     "next_jobs": []
   }
 ]

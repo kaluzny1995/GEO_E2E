@@ -1,0 +1,5 @@
+# Airflow scans the whole project directory for DAG files (core.dags_folder = GEO_E2E), so
+# everything except the mega-DAG is excluded here — the other .py files are plain modules
+# (imported by geo_pipeline.py through sys.path), not DAGs. Git-ignore pattern syntax.
+*
+!geo_pipeline.py

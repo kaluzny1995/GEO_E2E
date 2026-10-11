@@ -12,7 +12,7 @@ dependencies:
       - tox>=4.0
       - mypy>=1.10
       - types-psutil
-      # dags/geo_pipeline.py runs inside the Airflow container, but installing the same
+      # geo_pipeline.py runs inside the Airflow container, but installing the same
       # pinned versions here lets the IDE resolve the imports and lets us import-check the DAG.
       - apache-airflow==3.3.2
       - apache-airflow-providers-standard==1.19.0

@@ -256,12 +256,12 @@ def test_resolve_schedule_conflicting_crons_raises(jobs_path: Path) -> None:
 
 
 def test_jobs_json_shipped_registry_loads() -> None:
-    """The shipped jobs.json is a flat list of 46 uniquely named jobs."""
+    """The shipped jobs.json is a flat list of 47 uniquely named jobs."""
     # Arrange & Act
     jobs = load_jobs()
 
     # Assert
-    assert len(jobs) == 46
+    assert len(jobs) == 47
     names = [job.name for job in jobs]
     assert len(names) == len(set(names))
 
@@ -333,20 +333,30 @@ def test_jobs_json_scheduled_jobs_are_the_downloads() -> None:
 
 
 def test_jobs_json_union_job_stacks_every_source_table() -> None:
-    """The Union job is a bare SINGLE_ETL job on union_etl — the DAG turns its root into
-    the fan-in task that waits for every source's single_etl task."""
+    """The Union job is a SINGLE_ETL job on union_etl chaining a DATA_QUALITY job — the DAG
+    turns its root into the fan-in task that waits for every source's single_etl task."""
     # Arrange & Act
-    union = next(raw for raw in _load_shipped() if raw["source_name"] == "Union")
+    union_jobs = [raw for raw in _load_shipped() if raw["source_name"] == "Union"]
 
     # Assert
-    assert union == {
-        "name": "SINGLE_ETL-union_etl",
-        "source_name": "Union",
-        "job_type": "SINGLE_ETL",
-        "table_name": "union_etl",
-        "is_next_skipped_if_error": True,
-        "next_jobs": [],
-    }
+    assert union_jobs == [
+        {
+            "name": "SINGLE_ETL-union_etl",
+            "source_name": "Union",
+            "job_type": "SINGLE_ETL",
+            "table_name": "union_etl",
+            "is_next_skipped_if_error": True,
+            "next_jobs": ["DATA_QUALITY-union_etl"],
+        },
+        {
+            "name": "DATA_QUALITY-union_etl",
+            "source_name": "Union",
+            "job_type": "DATA_QUALITY",
+            "table_name": "union_etl",
+            "is_next_skipped_if_error": True,
+            "next_jobs": [],
+        },
+    ]
 
 
 def test_job_get_command_download() -> None:

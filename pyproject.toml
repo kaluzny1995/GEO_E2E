@@ -26,7 +26,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"] # package re-exports
 "test/**" = ["B011"]
-"dags/**" = ["E402"] # sys.path setup must precede the model/util imports
+"geo_pipeline.py" = ["E402"] # sys.path setup must precede the geo_dag/model/util imports
 
 [tool.ruff.format]
 quote-style = "double"
@@ -36,7 +36,7 @@ testpaths = ["test"]
 addopts = "-q"
 
 [tool.mypy]
-files = ["model.py", "util.py", "dags", "docker"]
+files = ["model.py", "geo_dag.py", "geo_pipeline.py", "util.py", "docker"]
 python_version = "3.11"
 warn_unused_configs = true
 show_error_codes = true

@@ -28,7 +28,7 @@ Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin`
 |------|------------|
 | **DAGs** | `geo_pipeline` is unpaused from the start (`dags_are_paused_at_creation=false`); see next/last run |
 | **Grid** view of a run | per-task state: green = success, red = failed, grey = skipped (downstream of a failure), light green = running |
-| **Graph** view | the full task graph — 46 tasks: 9 chains of 5 + the union fan-in |
+| **Graph** view | the full task graph — 47 tasks: 9 chains of 5 + the union chain (fan-in + data quality) |
 | **Gantt** view | task durations over the run |
 | Task log | the full stdout/stderr of the task's `conda run` subprocess (also includes the memory callback line) |
 | **Trigger DAG** | run the pipeline manually, without waiting for the 02:00 schedule |
