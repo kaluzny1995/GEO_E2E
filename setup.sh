@@ -26,7 +26,7 @@ fi
 FORCE=false
 
 usage() {
-    sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,8p' "${BASH_SOURCE[0]}" | sed -E 's/^#[[:space:]]?//'
 }
 
 for arg in "$@"; do
@@ -73,6 +73,16 @@ warn_missing_sibling GEO_Download
 warn_missing_sibling GEO_ETL
 
 CONDA_ROOT="${CONDA_ROOT:-$(conda info --base 2>/dev/null || true)}"
+if [[ -z "$CONDA_ROOT" ]]; then
+    for _candidate in "$HOME/anaconda3" "$HOME/miniconda3" "$HOME/miniforge3" \
+        /opt/anaconda3 /opt/miniconda3 /opt/homebrew/anaconda3 \
+        /usr/local/anaconda3 /usr/local/miniconda3; do
+        if [[ -d "$_candidate" ]]; then
+            CONDA_ROOT="$_candidate"
+            break
+        fi
+    done
+fi
 if [[ -z "$CONDA_ROOT" ]]; then
     if [[ "$IN_CONTAINER" == true ]]; then
         CONDA_ROOT=/opt/conda

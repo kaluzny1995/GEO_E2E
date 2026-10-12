@@ -12,6 +12,7 @@ GEO_E2E/
 ├── .env.local                # Machine-specific paths (written by ./setup.sh, not in git)
 ├── setup.sh                  # Bootstrap: writes .env.local (+ login) from this checkout; in a container writes .env.docker
 ├── setup.ps1                 # Windows twin of setup.sh — same detection, same file names
+├── setup.command             # macOS double-click entry point — thin wrapper that runs setup.sh
 ├── .gitignore                # Excludes .env, .env.local, .env.docker, logs/, __pycache__, .tox, IDE files
 ├── config.json               # Job config (command templates per job type)
 ├── jobs.json                 # Flat job registry: one object per job, next_jobs = name references

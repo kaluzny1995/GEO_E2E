@@ -117,7 +117,7 @@ conda env create -f ../GEO_ETL/environment.yml        # geo_etl_311
 ./setup.sh            # --force to regenerate, --help for the flags
 ```
 
-It prompts for the Airflow UI login (defaults `airflow_admin` / `airflow_admin` when stdin is not a TTY) and echoes the detected `GEO_ROOT`, `CONDA_ROOT` and `AIRFLOW_UID`. Run inside a Docker container it is non-interactive and writes `.env.docker` instead of `.env.local`. On Windows run `.\setup.ps1` instead — same detection, same file names (use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` if execution is blocked). Manual fallback: `cp .env.example .env.local` and adjust the six values.
+It prompts for the Airflow UI login (defaults `airflow_admin` / `airflow_admin` when stdin is not a TTY) and echoes the detected `GEO_ROOT`, `CONDA_ROOT` and `AIRFLOW_UID`. Run inside a Docker container it is non-interactive and writes `.env.docker` instead of `.env.local`. On macOS double-click `setup.command` (or run `./setup.command`) — it just runs `setup.sh`; after a ZIP download re-grant the exec bits with `chmod +x setup.command setup.sh`. On Windows run `.\setup.ps1` instead — same detection, same file names (use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` if execution is blocked). Manual fallback: `cp .env.example .env.local` and adjust the six values.
 
 `.env.local` defines the machine-specific paths, uid and the Airflow UI login — **the only place where your real values live** (`.env.local` is git-ignored; the compose file and the rest of the repo contain only variable references, no private paths or credentials). Compose does not auto-load that filename, so every command below carries `--env-file .env.local`:
 
