@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+# Config lives next to this module — the paths are resolved once at import time
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATH = os.path.join(_PROJECT_DIR, "config.json")
 _JOBS_PATH = os.path.join(_PROJECT_DIR, "jobs.json")
@@ -36,6 +37,7 @@ class JobTypeConfig(BaseModel):
     def get_command_pattern_string(self) -> str:
         """Build the command without arguments, e.g. `cd ..;cd GEO_ETL;conda run ... python run_etl.py`."""
         conda_part = f"conda run --no-capture-output -n {self.conda_env} " if self.conda_env else ""
+        # The cd ..;cd <folder> hop assumes cwd = GEO_E2E — the BashOperator sets it (see geo_dag)
         return f"cd ..;cd {self.folder_name};{conda_part}python {self.python_script}"
 
     def get_command_string(self, *args: str) -> str:
@@ -142,6 +144,7 @@ class Job(BaseModel):
         """
         job_config = get_job_config()
 
+        # DOWNLOAD takes the source name as its only argument; the other types take (job_type, table_name)
         if self.job_type == EJobType.DOWNLOAD:
             return job_config.download.get_command_string(self.source_name)
 
@@ -156,6 +159,7 @@ class Job(BaseModel):
         if self.job_type == EJobType.SINGLE_ETL:
             return job_config.single_etl.get_command_string(self.job_type.value, self.table_name)
 
+        # DATA_QUALITY is the only remaining job type — fall through to it
         return job_config.data_quality.get_command_string(self.job_type.value, self.table_name)
 
 
@@ -194,6 +198,7 @@ def _index_jobs(jobs: list[Job]) -> tuple[dict[str, Job], list[Job]]:
             raise ValueError(f'jobs.json has duplicate job name "{job.name}"')
         jobs_by_name[job.name] = job
 
+    # next_jobs forms a tree: every child must be claimed by exactly one parent
     parent_of: dict[str, str] = {}
     for job in jobs:
         for child_name in job.next_jobs:
@@ -261,6 +266,7 @@ def resolve_schedule() -> str:
     Raises:
         ValueError: When jobs.json has no scheduled job or more than one distinct schedule.
     """
+    # set() collapses the duplicate crons, sorted() keeps the error messages deterministic
     schedules = sorted({job.schedule for job in load_jobs() if job.schedule is not None})
     if not schedules:
         raise ValueError("jobs.json has no scheduled job — at least one job needs a schedule")
@@ -323,6 +329,8 @@ def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
             specs.extend(walked)
             single_etl_ids.extend(spec.task_id for spec in walked if spec.job_type == EJobType.SINGLE_ETL)
 
+    # The union root — the chain's only parentless spec — waits for every source's SINGLE_ETL
+    # task; its child keeps the plain parent link and the default all_success rule
     fan_in = tuple(single_etl_ids)
     union_specs = [
         spec.model_copy(update={"upstream": fan_in, "trigger_rule": "all_done_min_one_success"})

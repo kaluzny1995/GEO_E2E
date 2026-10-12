@@ -24,6 +24,7 @@ from airflow.task.trigger_rule import TriggerRule
 from model import DagSettings, EJobType, TaskSpec, build_task_specs, get_dag_settings, resolve_schedule
 from util import log_memory_usage
 
+# Trigger-rule names of a TaskSpec -> Airflow enum, so model.py needs no Airflow imports
 _TRIGGER_RULES = {
     "all_success": TriggerRule.ALL_SUCCESS,
     "all_done_min_one_success": TriggerRule.ALL_DONE_MIN_ONE_SUCCESS,
@@ -121,6 +122,7 @@ class JobsSubDAG:
         Upstreams rendered by *another* subDAG are left to `wire_upstreams_from()`.
         """
         tasks = {spec.task_id: self._make_task(spec) for spec in self._specs}
+        # Wire only the parents rendered inside this subDAG — foreign ids are wired by wire_upstreams_from()
         for spec in self._specs:
             upstreams = [tasks[upstream_id] for upstream_id in spec.upstream if upstream_id in self._task_ids]
             if upstreams:
@@ -139,6 +141,7 @@ class JobsSubDAG:
             ValueError: When a foreign upstream id is not rendered by any subDAG.
         """
         for spec in self._specs:
+            # Upstreams outside this subDAG = the cross-subDAG edges (today: the union fan-in)
             foreign = [upstream_id for upstream_id in spec.upstream if upstream_id not in self._task_ids]
             missing = [upstream_id for upstream_id in foreign if upstream_id not in tasks]
             if missing:
@@ -152,6 +155,7 @@ class JobsSubDAG:
         return BashOperator(
             task_id=spec.task_id,
             bash_command=spec.command,
+            # cwd = the project dir, so `cd ..;cd GEO_*` reaches the sibling projects
             cwd=str(self._project_dir),
             pool=self._dag_settings.pool_for(spec.job_type),
             trigger_rule=_TRIGGER_RULES[spec.trigger_rule],
@@ -183,6 +187,7 @@ class GEO_DAG:
         self._project_dir = project_dir if project_dir is not None else Path(__file__).resolve().parent
         if specs is None:
             specs = build_task_specs(union_source=self._dag_settings.union_source)
+        # Group the flat specs by source_name — the dict keeps jobs.json order
         groups: dict[str, list[TaskSpec]] = {}
         for spec in specs:
             groups.setdefault(spec.source_name, []).append(spec)
@@ -244,11 +249,13 @@ class GEO_DAG:
                 for a task no subDAG renders.
         """
         tasks: dict[str, BashOperator] = {}
+        # Phase 1: render every subDAG's tasks (duplicate task ids across subDAGs are rejected)
         for subdag in self._subdags:
             duplicates = subdag.task_ids.intersection(tasks)
             if duplicates:
                 raise ValueError(f"duplicate task ids: {', '.join(sorted(duplicates))}")
             tasks.update(subdag.to_airflow())
+        # Phase 2: wire dependencies now that every task exists (cross-subDAG edges included)
         for subdag in self._subdags:
             subdag.wire_upstreams_from(tasks)
         return tasks

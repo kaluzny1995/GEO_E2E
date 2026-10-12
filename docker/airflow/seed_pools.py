@@ -12,8 +12,10 @@ from pathlib import Path
 
 def seed_pools(config_path: Path) -> None:
     """Create or update every pool named in config.json's `dag.pool_slots`."""
+    # Read config.json on every start — the slot counts live there, not in this script
     pool_slots = json.loads(config_path.read_text())["dag"]["pool_slots"]
     for name, slots in pool_slots.items():
+        # airflow pools set <name> <slots> <import_tries>: 0 import retries, check=True fails the init on error
         subprocess.run(["/entrypoint", "airflow", "pools", "set", name, str(slots), "0"], check=True)
 
 

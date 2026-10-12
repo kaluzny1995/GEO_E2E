@@ -8,6 +8,7 @@ import psutil
 def get_memory_info() -> tuple[float, float, float]:
     """Return (used_gb, total_gb, percent) of system memory."""
     mem = psutil.virtual_memory()
+    # 1024**3 = bytes -> GiB, the unit used in the log message
     return mem.used / (1024**3), mem.total / (1024**3), mem.percent
 
 
