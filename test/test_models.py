@@ -62,7 +62,8 @@ def test_job_type_config_get_command_string() -> None:
 
 
 def test_job_config_creation() -> None:
-    """JobConfig exposes the download, ingestion, data_quality and single_etl command templates."""
+    """JobConfig exposes a command template per job type (download, ingestion, data_quality,
+    single_etl and view)."""
     # Arrange
     # Act
     config = JobConfig(
@@ -70,6 +71,7 @@ def test_job_config_creation() -> None:
         ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         data_quality=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         single_etl=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
+        view=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
     )
 
     # Assert
@@ -84,6 +86,9 @@ def test_job_config_creation() -> None:
     assert config.single_etl.folder_name == "GEO_ETL"
     assert config.single_etl.python_script == "run_etl.py"
     assert config.single_etl.conda_env == "geo_etl_311"
+    assert config.view.folder_name == "GEO_ETL"
+    assert config.view.python_script == "run_etl.py"
+    assert config.view.conda_env == "geo_etl_311"
 
 
 def test_get_job_config(tmp_path: Path) -> None:
@@ -114,6 +119,11 @@ def test_get_job_config(tmp_path: Path) -> None:
                         "python_script": "test_etl_script.py",
                         "conda_env": "test_single_etl_env",
                     },
+                    "view": {
+                        "folder_name": "TestEtlFolder",
+                        "python_script": "test_etl_script.py",
+                        "conda_env": "test_view_env",
+                    },
                 }
             }
         )
@@ -136,6 +146,9 @@ def test_get_job_config(tmp_path: Path) -> None:
     assert result.single_etl.folder_name == "TestEtlFolder"
     assert result.single_etl.python_script == "test_etl_script.py"
     assert result.single_etl.conda_env == "test_single_etl_env"
+    assert result.view.folder_name == "TestEtlFolder"
+    assert result.view.python_script == "test_etl_script.py"
+    assert result.view.conda_env == "test_view_env"
 
 
 def _dag_block() -> dict:
@@ -143,7 +156,13 @@ def _dag_block() -> dict:
     return {
         "start_date": "2026-01-01",
         "timezone": "Europe/Warsaw",
-        "pools": {"download": "download", "ingestion": "etl", "data_quality": "etl", "single_etl": "etl"},
+        "pools": {
+            "download": "download",
+            "ingestion": "etl",
+            "data_quality": "etl",
+            "single_etl": "etl",
+            "view": "etl",
+        },
         "pool_slots": {"download": 3, "etl": 2},
     }
 
@@ -176,6 +195,7 @@ def test_dag_settings_pool_for_maps_every_job_type() -> None:
     assert settings.pool_for(EJobType.INGESTION) == "etl"
     assert settings.pool_for(EJobType.DATA_QUALITY) == "etl"
     assert settings.pool_for(EJobType.SINGLE_ETL) == "etl"
+    assert settings.pool_for(EJobType.VIEW) == "etl"
 
 
 def test_dag_settings_unknown_timezone_raises(tmp_path: Path) -> None:

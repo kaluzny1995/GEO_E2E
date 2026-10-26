@@ -53,9 +53,11 @@ every `docker compose up` (`docker/airflow/seed_pools.py`).
   `all_done_min_one_success`: it starts as soon as the last single-ETL reached a terminal
   state, whatever the chains' results — **but only if at least one of them succeeded**. When
   all nine failed, the scheduler marks it `upstream_failed` (nothing fresh to stack); when all
-  nine are skipped, it is skipped too. It stacks the nine `*_etl` tables into `geo.union_etl`
-  and then runs `Union.single_etl.data_quality` — the union chain's terminal DATA_QUALITY step,
-  like every other DATA_QUALITY job of the registry.
+  nine are skipped, it is skipped too. It stacks the nine `*_etl` tables into `geo.union_etl`,
+  then runs `Union.single_etl.data_quality` — the union chain's terminal DATA_QUALITY step,
+  like every other DATA_QUALITY job of the registry — plus the seventeen `Union.single_etl.view.*`
+  tasks (siblings of that step, `all_success`, `etl` pool), each `run_etl.py VIEW <view_name>`
+  refreshing one view over the freshly stacked `geo.union_etl`.
 
 Tasks come from the flat job registry in `jobs.json` via `model.build_task_specs()`; the shell
 commands come from the `job` block of `config.json` and run in the conda environments

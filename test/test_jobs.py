@@ -23,7 +23,7 @@ def _chain() -> list[dict]:
             "name": "DOWNLOAD-NIFC",
             "source_name": "NIFC",
             "job_type": "DOWNLOAD",
-            "schedule": "0 2 * * *",
+            "schedule": "0 8 * * *",
             "is_next_skipped_if_error": True,
             "next_jobs": ["INGESTION-nifc_fire"],
         },
@@ -91,7 +91,7 @@ def test_load_jobs_preserves_order_and_fields(jobs_path: Path) -> None:
     assert ingestion.is_next_skipped_if_error is True
     assert ingestion.next_jobs == ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl"]
     assert jobs[0].table_name is None  # DOWNLOAD jobs carry no table_name
-    assert jobs[0].schedule == "0 2 * * *"  # scheduled jobs declare their cron
+    assert jobs[0].schedule == "0 8 * * *"  # scheduled jobs declare their cron
 
 
 def test_load_jobs_duplicate_name_raises(jobs_path: Path) -> None:
@@ -202,7 +202,7 @@ def test_union_job_must_not_be_scheduled(jobs_path: Path) -> None:
     """A scheduled union job fails the registry validation — it waits for the fan-in."""
     # Arrange
     jobs = _chain()
-    jobs.append({**_union_job(), "schedule": "0 2 * * *"})
+    jobs.append({**_union_job(), "schedule": "0 8 * * *"})
     jobs_path.write_text(json.dumps(jobs))
 
     # Act & Assert
@@ -219,7 +219,7 @@ def test_resolve_schedule_returns_the_shared_cron(jobs_path: Path) -> None:
     schedule = resolve_schedule()
 
     # Assert
-    assert schedule == "0 2 * * *"
+    assert schedule == "0 8 * * *"
 
 
 def test_resolve_schedule_without_scheduled_job_raises(jobs_path: Path) -> None:
@@ -256,12 +256,12 @@ def test_resolve_schedule_conflicting_crons_raises(jobs_path: Path) -> None:
 
 
 def test_jobs_json_shipped_registry_loads() -> None:
-    """The shipped jobs.json is a flat list of 47 uniquely named jobs."""
+    """The shipped jobs.json is a flat list of 64 uniquely named jobs."""
     # Arrange & Act
     jobs = load_jobs()
 
     # Assert
-    assert len(jobs) == 47
+    assert len(jobs) == 64
     names = [job.name for job in jobs]
     assert len(names) == len(set(names))
 
@@ -327,36 +327,70 @@ def test_jobs_json_scheduled_jobs_are_the_downloads() -> None:
     # Assert
     for job in jobs:
         if job["job_type"] == "DOWNLOAD":
-            assert job["schedule"] == "0 2 * * *", job["name"]
+            assert job["schedule"] == "0 8 * * *", job["name"]
         else:
             assert "schedule" not in job, job["name"]
 
 
+def _shipped_union_jobs() -> list[dict]:
+    """Every shipped job of the Union chain: the fan-in root, its DATA_QUALITY job, the VIEW jobs."""
+    return [raw for raw in _load_shipped() if raw["source_name"] == "Union"]
+
+
 def test_jobs_json_union_job_stacks_every_source_table() -> None:
-    """The Union job is a SINGLE_ETL job on union_etl chaining a DATA_QUALITY job — the DAG
-    turns its root into the fan-in task that waits for every source's single_etl task."""
+    """The Union chain is a SINGLE_ETL job on union_etl chaining a DATA_QUALITY job and the
+    VIEW jobs — the DAG turns its root into the fan-in task that waits for every source's
+    single_etl task, and each view reads the freshly stacked geo.union_etl."""
     # Arrange & Act
-    union_jobs = [raw for raw in _load_shipped() if raw["source_name"] == "Union"]
+    union_jobs = _shipped_union_jobs()
+    single_etl, data_quality, *views = union_jobs
 
     # Assert
-    assert union_jobs == [
-        {
-            "name": "SINGLE_ETL-union_etl",
+    assert single_etl == {
+        "name": "SINGLE_ETL-union_etl",
+        "source_name": "Union",
+        "job_type": "SINGLE_ETL",
+        "table_name": "union_etl",
+        "is_next_skipped_if_error": True,
+        "next_jobs": ["DATA_QUALITY-union_etl", *(f"VIEW-{view['table_name']}" for view in views)],
+    }
+    assert data_quality == {
+        "name": "DATA_QUALITY-union_etl",
+        "source_name": "Union",
+        "job_type": "DATA_QUALITY",
+        "table_name": "union_etl",
+        "is_next_skipped_if_error": True,
+        "next_jobs": [],
+    }
+    assert len(views) == 17
+    for view in views:
+        assert view == {
+            "name": f"VIEW-{view['table_name']}",
             "source_name": "Union",
-            "job_type": "SINGLE_ETL",
-            "table_name": "union_etl",
-            "is_next_skipped_if_error": True,
-            "next_jobs": ["DATA_QUALITY-union_etl"],
-        },
-        {
-            "name": "DATA_QUALITY-union_etl",
-            "source_name": "Union",
-            "job_type": "DATA_QUALITY",
-            "table_name": "union_etl",
+            "job_type": "VIEW",
+            "table_name": view["table_name"],
             "is_next_skipped_if_error": True,
             "next_jobs": [],
-        },
-    ]
+        }
+        assert "schedule" not in view, view["name"]
+
+
+def test_shipped_view_jobs_wait_for_the_union_single_etl() -> None:
+    """Every VIEW job of the shipped registry waits for the SINGLE_ETL of union_etl — all
+    seventeen views read geo.union_etl, so they start right after it was stacked."""
+    # Arrange
+    specs = {spec.task_id: spec for spec in build_task_specs()}
+    views = [job for job in load_jobs() if job.job_type == EJobType.VIEW]
+
+    # Assert
+    assert len(views) == 17
+    for view in views:
+        spec = specs[f"Union.single_etl.view.{view.table_name}"]
+        assert spec.upstream == ("Union.single_etl",)
+        assert spec.trigger_rule == "all_success"
+        assert spec.command == (
+            f"cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py VIEW {view.table_name}"
+        )
 
 
 def test_job_get_command_download() -> None:
@@ -441,6 +475,30 @@ def test_job_get_command_single_etl_without_table_name_raises() -> None:
     """A SINGLE_ETL job without table_name raises ValueError."""
     # Arrange
     job = Job(name="SINGLE_ETL-nifc_fire_etl", source_name="NIFC", job_type=EJobType.SINGLE_ETL)
+
+    # Act & Assert
+    with pytest.raises(ValueError, match="no table_name"):
+        job.get_command()
+
+
+def test_job_get_command_view() -> None:
+    """A VIEW job builds the run_etl.py command with the view script name."""
+    # Arrange
+    job = Job(name="VIEW-metrics_flood_vw", source_name="Union", job_type=EJobType.VIEW, table_name="metrics_flood_vw")
+
+    # Act
+    result = job.get_command()
+
+    # Assert
+    assert result == (
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py VIEW metrics_flood_vw"
+    )
+
+
+def test_job_get_command_view_without_table_name_raises() -> None:
+    """A VIEW job without table_name raises ValueError."""
+    # Arrange
+    job = Job(name="VIEW-metrics_flood_vw", source_name="Union", job_type=EJobType.VIEW)
 
     # Act & Assert
     with pytest.raises(ValueError, match="no table_name"):

@@ -23,6 +23,7 @@ class EJobType(StrEnum):
     INGESTION = "INGESTION"
     DATA_QUALITY = "DATA_QUALITY"
     SINGLE_ETL = "SINGLE_ETL"
+    VIEW = "VIEW"
 
 
 class JobTypeConfig(BaseModel):
@@ -46,18 +47,19 @@ class JobTypeConfig(BaseModel):
 
 
 class JobConfig(BaseModel):
-    """The `job` block of config.json — command templates for DOWNLOAD, INGESTION, DATA_QUALITY and SINGLE_ETL."""
+    """The `job` block of config.json — command templates for every job type."""
 
     download: JobTypeConfig
     ingestion: JobTypeConfig
     data_quality: JobTypeConfig
     single_etl: JobTypeConfig
+    view: JobTypeConfig
 
     model_config = ConfigDict(frozen=True)
 
 
 def get_job_config() -> JobConfig:
-    """Load the `job` block of config.json (DOWNLOAD, INGESTION, DATA_QUALITY and SINGLE_ETL command templates)."""
+    """Load the `job` block of config.json (the command template of every job type)."""
     with open(_CONFIG_PATH) as f:
         return JobConfig(**json.load(f)["job"])
 
@@ -69,6 +71,7 @@ class PoolConfig(BaseModel):
     ingestion: str
     data_quality: str
     single_etl: str
+    view: str
 
     model_config = ConfigDict(frozen=True)
 
@@ -108,6 +111,7 @@ class DagSettings(BaseModel):
             EJobType.INGESTION: self.pools.ingestion,
             EJobType.DATA_QUALITY: self.pools.data_quality,
             EJobType.SINGLE_ETL: self.pools.single_etl,
+            EJobType.VIEW: self.pools.view,
         }[job_type]
 
 
@@ -139,8 +143,8 @@ class Job(BaseModel):
         """Build the shell command of this job from the `job` block of config.json.
 
         Raises:
-            ValueError: When an INGESTION, DATA_QUALITY or SINGLE_ETL job has no table_name
-                configured in jobs.json.
+            ValueError: When a non-DOWNLOAD job (INGESTION, DATA_QUALITY, SINGLE_ETL or
+                VIEW) has no table_name configured in jobs.json.
         """
         job_config = get_job_config()
 
@@ -158,6 +162,9 @@ class Job(BaseModel):
 
         if self.job_type == EJobType.SINGLE_ETL:
             return job_config.single_etl.get_command_string(self.job_type.value, self.table_name)
+
+        if self.job_type == EJobType.VIEW:
+            return job_config.view.get_command_string(self.job_type.value, self.table_name)
 
         # DATA_QUALITY is the only remaining job type — fall through to it
         return job_config.data_quality.get_command_string(self.job_type.value, self.table_name)
@@ -242,6 +249,11 @@ def _walk_chain(jobs_by_name: dict[str, Job], job: Job, parent_id: str | None, p
     # The chain root's DOWNLOAD is not part of its children's id prefix (NIFC.ingestion, not NIFC.download.ingestion)
     id_path = tuple(job_type for job_type in path if job_type != EJobType.DOWNLOAD.lower())
     task_path = (*id_path, job.job_type.lower())
+    # VIEW jobs run side by side under one parent (the shipped registry stacks 17 of them under
+    # the union single_etl) — the script name keeps their sibling ids unique
+    # (Union.single_etl.view.metrics_flood_vw, not Union.single_etl.view)
+    if job.job_type == EJobType.VIEW and job.table_name is not None:
+        task_path = (*task_path, job.table_name)
     task_id = ".".join((job.source_name, *task_path))
     spec = TaskSpec(
         task_id=task_id,
@@ -288,7 +300,8 @@ def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
     it waits for the SINGLE_ETL task of every source chain with `all_done_min_one_success` —
     it starts whatever the chains' results, but only when at least one single-ETL succeeded
     (with none, the scheduler marks it `upstream_failed` — nothing fresh to stack). The
-    DATA_QUALITY jobs stay terminal steps with no successors, like in the old Celery chains.
+    DATA_QUALITY jobs stay terminal steps with no successors, like in the old Celery chains;
+    so do the VIEW jobs the union root chains on (they only read the freshly stacked table).
 
     Raises:
         ValueError: When jobs.json has no single root job for *union_source*, a non-union root

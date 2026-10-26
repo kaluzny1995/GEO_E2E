@@ -13,7 +13,8 @@
       "download": "download",
       "ingestion": "etl",
       "data_quality": "etl",
-      "single_etl": "etl"
+      "single_etl": "etl",
+      "view": "etl"
     },
     "pool_slots": {
       "download": 3,
@@ -37,6 +38,11 @@
       "conda_env": "geo_etl_311"
     },
     "single_etl": {
+      "folder_name": "GEO_ETL",
+      "python_script": "run_etl.py",
+      "conda_env": "geo_etl_311"
+    },
+    "view": {
       "folder_name": "GEO_ETL",
       "python_script": "run_etl.py",
       "conda_env": "geo_etl_311"

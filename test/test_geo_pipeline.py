@@ -56,7 +56,8 @@ def test_groups_the_registry_into_nine_source_subdags_and_the_union() -> None:
 
 def test_each_subdag_holds_one_source_chain() -> None:
     """Every subDAG carries the task ids of exactly one source: five tasks per source chain,
-    two for the union chain, and no task id is shared between subDAGs."""
+    nineteen for the union chain (fan-in + data quality + the seventeen views), and no task id
+    is shared between subDAGs."""
     # Arrange & Act
     geo_dag, _, _ = _render_geo_dag()
 
@@ -68,7 +69,11 @@ def test_each_subdag_holds_one_source_chain() -> None:
         rendered |= subdag.task_ids
 
         if subdag is geo_dag.union_subdag:
-            assert subdag.task_ids == {"Union.single_etl", "Union.single_etl.data_quality"}
+            assert subdag.task_ids == {
+                "Union.single_etl",
+                "Union.single_etl.data_quality",
+                *(spec.task_id for spec in build_task_specs() if spec.job_type == EJobType.VIEW),
+            }
         else:
             assert len(subdag.task_ids) == 5, subdag.source_name
     assert len(rendered) == len(build_task_specs())
@@ -127,6 +132,23 @@ def test_union_data_quality_wired_under_the_union_single_etl() -> None:
     assert child.pool == get_dag_settings().pool_for(EJobType.DATA_QUALITY)
 
 
+def test_view_tasks_render_under_the_union_single_etl_in_the_etl_pool() -> None:
+    """Every VIEW job renders into a BashOperator waiting for the union single-ETL with
+    all_success, running in the etl pool — the seventeen views read geo.union_etl together."""
+    # Arrange & Act
+    _, _, tasks = _render_geo_dag()
+    view_tasks = [task for task_id, task in tasks.items() if task_id.startswith("Union.single_etl.view.")]
+
+    # Assert
+    assert len(view_tasks) == 17
+    for task in view_tasks:
+        assert task.upstream_task_ids == {"Union.single_etl"}
+        assert task.trigger_rule == TriggerRule.ALL_SUCCESS
+        assert task.pool == get_dag_settings().pool_for(EJobType.VIEW)
+        view_name = task.task_id.rsplit(".", 1)[-1]
+        assert str(task.bash_command).endswith(f"run_etl.py VIEW {view_name}")
+
+
 def test_jobs_subdag_rejects_specs_of_several_sources_or_no_specs() -> None:
     """A JobsSubDAG holds the partial registry of exactly one source."""
     # Arrange
@@ -174,7 +196,7 @@ def test_dag_kwargs_carry_the_mega_dag_settings() -> None:
 
     # Assert
     assert kwargs["dag_id"] == settings.dag_id
-    assert kwargs["schedule"] == "0 2 * * *"
+    assert kwargs["schedule"] == "0 8 * * *"
     assert kwargs["catchup"] is settings.catchup
     assert kwargs["max_active_runs"] == settings.max_active_runs
     assert kwargs["tags"] == settings.tags

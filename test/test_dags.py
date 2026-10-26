@@ -25,6 +25,11 @@ def _expected_fan_in() -> set[str]:
     return {f"{raw['source_name']}.ingestion.single_etl" for raw in _load_jobs() if raw["job_type"] == "DOWNLOAD"}
 
 
+def _expected_view_task_ids() -> set[str]:
+    """The VIEW task ids of the shipped registry — the script name keeps the siblings unique."""
+    return {f"Union.single_etl.view.{raw['table_name']}" for raw in _load_jobs() if raw["job_type"] == "VIEW"}
+
+
 def test_specs_cover_every_job_in_jobs_json() -> None:
     """One spec per job in the jobs.json registry, with unique task ids."""
     # Arrange
@@ -74,12 +79,16 @@ def test_union_waits_for_every_single_etl_and_needs_a_success() -> None:
     assert union_root.trigger_rule == "all_done_min_one_success"
     assert set(union_root.upstream) == _expected_fan_in()
     assert len(union_root.upstream) == 9
-    assert set(union_specs) == {"Union.single_etl", "Union.single_etl.data_quality"}
+    assert set(union_specs) == {
+        "Union.single_etl",
+        "Union.single_etl.data_quality",
+        *_expected_view_task_ids(),
+    }
 
 
 def test_only_the_union_root_uses_all_done_min_one_success() -> None:
     """all_done_min_one_success is reserved for the union root — every other task, the union
-    data-quality step included, runs when its parent succeeded."""
+    data-quality and view steps included, runs when its parent succeeded."""
     # Arrange & Act
     specs = {spec.task_id: spec for spec in build_task_specs()}
 
@@ -89,7 +98,8 @@ def test_only_the_union_root_uses_all_done_min_one_success() -> None:
 
 
 def test_union_children_keep_all_success() -> None:
-    """The shipped DATA_QUALITY job chained under the union root waits for it with all_success."""
+    """Every job chained under the union root — the DATA_QUALITY step and the seventeen VIEW
+    jobs — waits for it with the default all_success rule."""
     # Arrange & Act
     specs = {spec.task_id: spec for spec in build_task_specs()}
 
@@ -97,6 +107,9 @@ def test_union_children_keep_all_success() -> None:
     child = specs["Union.single_etl.data_quality"]
     assert child.upstream == ("Union.single_etl",)
     assert child.trigger_rule == "all_success"
+    for task_id in _expected_view_task_ids():
+        assert specs[task_id].upstream == ("Union.single_etl",)
+        assert specs[task_id].trigger_rule == "all_success"
 
 
 def test_commands_are_built_from_config() -> None:
@@ -123,6 +136,7 @@ def test_job_types_are_preserved_for_pooling() -> None:
     assert specs["NIFC.ingestion"].job_type == EJobType.INGESTION
     assert specs["NIFC.ingestion.data_quality"].job_type == EJobType.DATA_QUALITY
     assert specs["NIFC.ingestion.single_etl"].job_type == EJobType.SINGLE_ETL
+    assert specs["Union.single_etl.view.metrics_flood_vw"].job_type == EJobType.VIEW
 
 
 def test_missing_union_source_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

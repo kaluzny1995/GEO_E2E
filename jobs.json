@@ -3,7 +3,7 @@
     "name": "DOWNLOAD-USGS_Earthquake",
     "source_name": "USGS_Earthquake",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-usgs_earthquake"
@@ -50,7 +50,7 @@
     "name": "DOWNLOAD-GDACS",
     "source_name": "GDACS",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-gdacs_event"
@@ -97,7 +97,7 @@
     "name": "DOWNLOAD-EONET",
     "source_name": "EONET",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-eonet_event"
@@ -144,7 +144,7 @@
     "name": "DOWNLOAD-OpenMeteo_Flood",
     "source_name": "OpenMeteo_Flood",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-openmeteo_flood"
@@ -191,7 +191,7 @@
     "name": "DOWNLOAD-USGS_NWIS",
     "source_name": "USGS_NWIS",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-usgs_nwis"
@@ -238,7 +238,7 @@
     "name": "DOWNLOAD-Avalanche_ORG",
     "source_name": "Avalanche_ORG",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-avalanche_org"
@@ -285,7 +285,7 @@
     "name": "DOWNLOAD-IBTrACS",
     "source_name": "IBTrACS",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-ibtracs_cyclone"
@@ -332,7 +332,7 @@
     "name": "DOWNLOAD-USGS_Volcano",
     "source_name": "USGS_Volcano",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-usgs_volcano"
@@ -379,7 +379,7 @@
     "name": "DOWNLOAD-NIFC",
     "source_name": "NIFC",
     "job_type": "DOWNLOAD",
-    "schedule": "0 2 * * *",
+    "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "INGESTION-nifc_fire"
@@ -429,7 +429,24 @@
     "table_name": "union_etl",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "DATA_QUALITY-union_etl"
+      "DATA_QUALITY-union_etl",
+      "VIEW-metrics_avalanche_vw",
+      "VIEW-metrics_drought_vw",
+      "VIEW-metrics_earthquake_vw",
+      "VIEW-metrics_fire_vw",
+      "VIEW-metrics_flood_vw",
+      "VIEW-metrics_iceberg_vw",
+      "VIEW-metrics_storm_vw",
+      "VIEW-metrics_volcano_vw",
+      "VIEW-phenomenons_us_vw",
+      "VIEW-phenomenons_ca_vw",
+      "VIEW-phenomenons_cs_amer_vw",
+      "VIEW-phenomenons_ru_vw",
+      "VIEW-phenomenons_europe_vw",
+      "VIEW-phenomenons_asia_vw",
+      "VIEW-phenomenons_africa_vw",
+      "VIEW-phenomenons_aus_oc_vw",
+      "VIEW-phenomenons_waters_vw"
     ]
   },
   {
@@ -437,6 +454,142 @@
     "source_name": "Union",
     "job_type": "DATA_QUALITY",
     "table_name": "union_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_avalanche_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_avalanche_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_drought_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_drought_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_earthquake_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_earthquake_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_fire_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_fire_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_flood_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_flood_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_iceberg_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_iceberg_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_storm_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_storm_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_volcano_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_volcano_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_us_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_us_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_ca_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_ca_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_cs_amer_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_cs_amer_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_ru_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_ru_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_europe_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_europe_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_asia_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_asia_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_africa_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_africa_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_aus_oc_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_aus_oc_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "VIEW-phenomenons_waters_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "phenomenons_waters_vw",
     "is_next_skipped_if_error": true,
     "next_jobs": []
   }

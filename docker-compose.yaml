@@ -149,6 +149,7 @@ services:
       - geo_network
     volumes:
       - ${GEO_DATA_DIR}:${GEO_DATA_DIR}:ro
+    restart: always
 
   geo_spark_worker_1:
     build: ../GEO_ETL/spark_cluster_image

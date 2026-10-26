@@ -28,11 +28,11 @@ Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin`
 |------|------------|
 | **DAGs** | `geo_pipeline` is unpaused from the start (`dags_are_paused_at_creation=false`); see next/last run |
 | **Grid** view of a run | per-task state: green = success, red = failed, grey = skipped (downstream of a failure), light green = running |
-| **Graph** view | the full task graph — 47 tasks: 9 chains of 5 + the union chain (fan-in + data quality) |
+| **Graph** view | the full task graph — 64 tasks: 9 chains of 5 + the union chain (fan-in + data quality + 17 views) |
 | **Gantt** view | task durations over the run |
 | Task log | the full stdout/stderr of the task's `conda run` subprocess (also includes the memory callback line) |
-| **Trigger DAG** | run the pipeline manually, without waiting for the 02:00 schedule |
-| **Active/Paused** toggle | turn the daily 02:00 schedule on/off (manual triggers still work while paused) |
+| **Trigger DAG** | run the pipeline manually, without waiting for the 08:00 schedule |
+| **Active/Paused** toggle | turn the daily 08:00 schedule on/off (manual triggers still work while paused) |
 | Failed task → **Clear** | re-run just that task (and its downstream) after a fix — no marker files to clean up |
 | **Admin → Pools** | inspect the `download` (3 slots) and `etl` (2 slots) pools — seeded automatically by `airflow-init` |
 
@@ -55,7 +55,7 @@ docker compose --env-file .env.local run --rm airflow-cli tasks test geo_pipelin
 
 ## Pause / unpause the schedule
 
-The **Active/Paused** toggle next to `geo_pipeline` on the **DAGs** page turns the daily 02:00 schedule off/on. Same via the CLI container:
+The **Active/Paused** toggle next to `geo_pipeline` on the **DAGs** page turns the daily 08:00 schedule off/on. Same via the CLI container:
 
 ```bash
 docker compose --env-file .env.local run --rm airflow-cli dags pause geo_pipeline     # schedule off

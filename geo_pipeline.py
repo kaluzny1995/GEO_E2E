@@ -1,6 +1,6 @@
 """Airflow DAG `geo_pipeline`: the E2E mega-DAG built by `geo_dag.GEO_DAG` — nine source
 subDAGs (download -> ingestion + data quality -> single_etl + data quality) plus the union
-subDAG (single_etl + data quality), wired together by the union fan-in.
+subDAG (single_etl + data quality + the seventeen views), wired together by the union fan-in.
 The cron comes from the scheduled jobs of jobs.json; every other knob (timezone, retries,
 timeout, pools) from the `dag` block of config.json."""
 

@@ -8,11 +8,13 @@ GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** dow
 
 A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `ingestion.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The union chain then runs `DATA_QUALITY union_etl` to measure the freshly stacked table. Every DATA_QUALITY job is a terminal step with no successors (like in the old Celery chains).
 
+Seventeen `VIEW` jobs hang off that same `union_etl` task — siblings of the union data-quality step, running in parallel with it: each runs `GEO_ETL/run_etl.py VIEW <view_name>` to (re)create one view over `geo.union_etl` (the `metrics_*_vw` and `phenomenons_*_vw` views of GEO_ETL), so the views always reflect the newest stack. They are terminal steps too — nothing runs after them.
+
 Each data source's jobs live in the flat `jobs.json` registry (one object per job; `next_jobs` references the dependent jobs by `name`, same pattern as E2EReddit). `model.build_task_specs()` validates the registry and resolves it into Airflow task specs, which `geo_dag.GEO_DAG` groups into ten code-level subDAGs — one `geo_dag.JobsSubDAG` per source chain plus the union chain — and renders into `BashOperator`s of the single mega-DAG (`geo_pipeline.py` is only its `@dag` wrapper), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
 
 The system runs as Docker Compose services:
 
-1. **Airflow Scheduler** — triggers the `geo_pipeline` DAG daily at 02:00 (Europe/Warsaw) and runs its tasks (LocalExecutor).
+1. **Airflow Scheduler** — triggers the `geo_pipeline` DAG daily at 08:00 (Europe/Warsaw) and runs its tasks (LocalExecutor).
 2. **Airflow API server + UI** — web UI at http://localhost:8090 (login: `airflow_admin` / `airflow_admin` from `.env.local`) for monitoring, manually triggering and re-running jobs.
 3. **Airflow DAG processor** — parses `geo_pipeline.py` into tasks.
 
@@ -23,6 +25,7 @@ PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped b
 - **Dependency-driven sequencing** — DOWNLOAD → INGESTION → (DATA_QUALITY, SINGLE_ETL → DATA_QUALITY) is expressed as DAG dependencies; no marker files, no polling.
 - **Web UI monitoring** — live grid/gantt/log view of every job at http://localhost:8090; failures show up as red tasks instead of hidden log warnings.
 - **Union fan-in with `all_done_min_one_success`** — the union job waits for all nine `ingestion.single_etl` tasks to reach a terminal state (whatever their results) and runs only if at least one succeeded; no deadline fallback needed, and the DATA_QUALITY jobs stay terminal (no successors).
+- **Views after the stack** — the seventeen `VIEW` jobs wait for the `union_etl` task with `all_success` and refresh the `metrics_*_vw` / `phenomenons_*_vw` views on the freshly stacked table.
 - **Failure gating** — a failed task skips everything chained below it (`all_success` trigger rule = the old `is_stop_if_error` semantics), siblings unaffected.
 - **Pools** — at most 3 concurrent downloads and 2 concurrent ETL/Spark jobs.
 - **Timeouts, no retries** — every task is killed after 30 minutes (old `task_time_limit`) and never retried.
@@ -35,7 +38,7 @@ PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped b
 ```mermaid
 flowchart TD
     A[jobs.json] -->|build_task_specs| B[geo_pipeline.py]
-    B -->|schedule 02:00 Europe/Warsaw| C[Airflow Scheduler]
+    B -->|schedule 08:00 Europe/Warsaw| C[Airflow Scheduler]
     C -->|pool: download (3 slots)| D[NIFC.download ... USGS_Earthquake.download]
     D -->|all_success| E[...ingestion]
     E -->|all_success| F[...ingestion.data_quality]
@@ -49,6 +52,7 @@ flowchart TD
     E -->|JDBC + Spark| K[GEO_ETL/run_etl.py INGESTION / DATA_QUALITY / SINGLE_ETL]
     U -->|JDBC + Spark| L[geo.union_etl]
     U -->|all_success| UQ[Union data quality]
+    U -->|all_success| UV[Union views (17)]
     C -->|task logs| M[http://localhost:8090]
 ```
 
@@ -83,8 +87,8 @@ flowchart TD
 - **Conda** — for environment management
 - **Docker** — for the Airflow stack and the Spark cluster
 - **GEO_Download** — must be a sibling directory (i.e. `../GEO_Download/`) with the `geo_download_311` conda env created, since downloads run there
-- **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion, single-ETL and data-quality runs happen there
-- **Spark cluster** — must be up (`docker compose --env-file .env.local up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion, single-ETL and data-quality jobs can connect
+- **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion, single-ETL, data-quality and view runs happen there
+- **Spark cluster** — must be up (`docker compose --env-file .env.local up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion, single-ETL, data-quality and view jobs can connect
 
 ## Setup
 
@@ -102,7 +106,7 @@ For an environment that already exists:
 conda env update -f environment.yml
 ```
 
-The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json` — the data-quality and single-ETL steps reuse `geo_etl_311`), so create those too if they don't exist yet:
+The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json` — the data-quality, single-ETL and view steps reuse `geo_etl_311`), so create those too if they don't exist yet:
 
 ```bash
 conda env create -f ../GEO_Download/environment.yml   # geo_download_311
@@ -161,7 +165,7 @@ This starts:
 Two one-time UI steps are automated:
 
 - **Pools** — `airflow-init` seeds them on every start (idempotent): `download` = 3 slots, `etl` = 2 slots.
-- **Unpausing** — `dags_are_paused_at_creation=false`, so `geo_pipeline` is created **unpaused** on first parse and runs daily at 02:00 (Europe/Warsaw).
+- **Unpausing** — `dags_are_paused_at_creation=false`, so `geo_pipeline` is created **unpaused** on first parse and runs daily at 08:00 (Europe/Warsaw).
 
 Verify in the UI at http://localhost:8090 → **DAGs** (the toggle is on) or via `docker compose --env-file .env.local run --rm airflow-cli pools list` / `dags list`. You can also trigger a run manually via **Trigger DAG**.
 
