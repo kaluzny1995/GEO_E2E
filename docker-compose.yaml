@@ -13,7 +13,17 @@ x-airflow-common: &airflow-common
     # Create DAGs unpaused on first parse — no manual unpause in the UI needed
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@127.0.0.1:5472/airflow
+    # Supabase Postgres is the metadata DB (no local Postgres container). The five
+    # SUPABASE_DB_* values live in .env.local (git-ignored) — same variable names as the
+    # GEO_ETL project — see .env.example. The URL pins search_path to AIRFLOW_DB_SCHEMA so
+    # every Airflow table lands in the `geo_airflow` schema; airflow-init creates that schema
+    # (docker/airflow/create_schema.py) before the migration runs, otherwise Postgres would
+    # silently create the tables in the default schema instead. The password travels in
+    # PGPASSWORD (read by libpq) rather than inside the URL, so it needs no URL-encoding;
+    # `sslmode=require` because Supabase terminates TLS on the pooler.
+    AIRFLOW_DB_SCHEMA: ${AIRFLOW_DB_SCHEMA:-geo_airflow}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${SUPABASE_DB_USER:?Set SUPABASE_DB_USER in .env.local (run ./setup.sh)}@${SUPABASE_DB_HOST:?Set SUPABASE_DB_HOST in .env.local (run ./setup.sh)}:${SUPABASE_DB_PORT:?Set SUPABASE_DB_PORT in .env.local (run ./setup.sh)}/${SUPABASE_DB_NAME:?Set SUPABASE_DB_NAME in .env.local (run ./setup.sh)}?sslmode=require&options=-c%20search_path%3D${AIRFLOW_DB_SCHEMA:-geo_airflow}
+    PGPASSWORD: ${SUPABASE_DB_PASSWORD:?Set SUPABASE_DB_PASSWORD in .env.local (run ./setup.sh)}
     AIRFLOW__API__PORT: "8090"
     AIRFLOW__API__BASE_URL: http://localhost:8090
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://localhost:8090/execution/
@@ -36,30 +46,8 @@ x-airflow-common: &airflow-common
     - airflow_data:/opt/airflow
   user: "${AIRFLOW_UID:-50000}:0"
   network_mode: host
-  depends_on: &airflow-common-depends-on
-    airflow-postgres:
-      condition: service_healthy
 
 services:
-  airflow-postgres:
-    image: postgres:16
-    container_name: geo_airflow_postgres
-    environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
-    ports:
-      - "5472:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-    restart: always
-
   airflow-init:
     <<: *airflow-common
     entrypoint: /bin/bash
@@ -68,6 +56,9 @@ services:
       - |
         mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins /opt/airflow/config
         chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
+        # Create the Supabase schema first — the connection pins search_path to it, and Postgres
+        # has no DDL for "create if missing" inside Airflow's own migration. Idempotent.
+        python "${GEO_ROOT}/GEO_E2E/docker/airflow/create_schema.py"
         /entrypoint airflow version
         # Seed the concurrency pools from config.json (`dag.pool_slots`; idempotent — re-running
         # docker compose up resets them to the configured slot counts). The script invokes the
@@ -87,7 +78,6 @@ services:
   airflow-dag-processor:
     <<: *airflow-common
     depends_on:
-      <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
     command: dag-processor
@@ -96,7 +86,6 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     depends_on:
-      <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
     command: scheduler
@@ -114,7 +103,6 @@ services:
   airflow-api-server:
     <<: *airflow-common
     depends_on:
-      <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
     command: api-server
@@ -130,7 +118,6 @@ services:
     <<: *airflow-common
     profiles: [debug]
     depends_on:
-      <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
     command:
@@ -190,7 +177,6 @@ services:
 
 volumes:
   airflow_data:
-  postgres_data:
 
 networks:
   geo_network:

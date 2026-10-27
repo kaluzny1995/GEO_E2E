@@ -20,7 +20,7 @@ The system runs as Docker Compose services:
 2. **Airflow API server + UI** — web UI at http://localhost:8090 (login: `airflow_admin` / `airflow_admin` from `.env.local`) for monitoring, manually triggering and re-running jobs.
 3. **Airflow DAG processor** — parses `geo_pipeline.py` into tasks.
 
-PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
+Airflow's metadata lives in the **Supabase** Postgres database — the `geo_airflow` schema of the project configured in `.env.local` (no local database container); concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
 
 ## Features
 
@@ -70,7 +70,7 @@ flowchart TD
 | Language         | Python 3.11                                   |
 | Orchestrator     | Apache Airflow 3.3.2 (LocalExecutor)          |
 | Web UI           | Airflow API server on http://localhost:8090   |
-| Metadata DB      | PostgreSQL 16 (host port 5472)                |
+| Metadata DB      | Supabase Postgres (`geo_airflow` schema)      |
 | Data Validation  | Pydantic >= 2.0.0                             |
 | Memory Monitor   | psutil >= 5.9.0                               |
 | Testing          | pytest >= 7.0.0                               |
@@ -85,7 +85,7 @@ flowchart TD
 | Document | Contents |
 |----------|----------|
 | [Architecture](docs/architecture.md) | Project layout, DAG generation and failure handling. |
-| [Configuration](docs/configuration.md) | `config.json` and `jobs.json` reference — command templates, chains, DAG settings, source → table mapping, and how to construct the DAG (placing jobs, dependencies, union fan-in). |
+| [Configuration](docs/configuration.md) | `config.json` and `jobs.json` reference — command templates, chains, DAG settings, source → table mapping, and how to construct the DAG (placing jobs, dependencies, union fan-in); plus the Supabase metadata DB and a step-by-step `.env.local` walkthrough. |
 | [Usage](docs/usage.md) | Starting the Airflow stack, the web UI, manual triggers, log locations and example output. |
 | [Development](docs/development.md) | Running the tests, Ruff lint/format, mypy and tox environments. |
 
@@ -128,9 +128,9 @@ conda env create -f ../GEO_ETL/environment.yml        # geo_etl_311
 ./setup.sh            # --force to regenerate, --help for the flags
 ```
 
-It prompts for the Airflow UI login (defaults `airflow_admin` / `airflow_admin` when stdin is not a TTY) and echoes the detected `GEO_ROOT`, `CONDA_ROOT` and `AIRFLOW_UID`. Run inside a Docker container it is non-interactive and writes `.env.docker` instead of `.env.local`. On macOS double-click `setup.command` (or run `./setup.command`) — it just runs `setup.sh`; after a ZIP download re-grant the exec bits with `chmod +x setup.command setup.sh`. On Windows run `.\setup.ps1` instead — same detection, same file names (use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` if execution is blocked). Manual fallback: `cp .env.example .env.local` and adjust the six values.
+It prompts for the Airflow UI login (defaults `airflow_admin` / `airflow_admin` when stdin is not a TTY) and echoes the detected `GEO_ROOT`, `CONDA_ROOT`, `AIRFLOW_UID` and `SUPABASE_DB_*` host. The Supabase credentials are never prompted — they are copied from an existing `.env.local` or, when absent, from `../GEO_ETL/.env` (same Supabase project, same variable names); fill them by hand only if neither exists (see `.env.example`). Run inside a Docker container it is non-interactive and writes `.env.docker` instead of `.env.local`. On macOS double-click `setup.command` (or run `./setup.command`) — it just runs `setup.sh`; after a ZIP download re-grant the exec bits with `chmod +x setup.command setup.sh`. On Windows run `.\setup.ps1` instead — same detection, same file names (use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` if execution is blocked). Manual fallback: `cp .env.example .env.local` and adjust the values.
 
-`.env.local` defines the machine-specific paths, uid and the Airflow UI login — **the only place where your real values live** (`.env.local` is git-ignored; the compose file and the rest of the repo contain only variable references, no private paths or credentials). Compose does not auto-load that filename, so every command below carries `--env-file .env.local`:
+`.env.local` defines the machine-specific paths, uid, the Airflow UI login and the Supabase credentials — **the only place where your real values live** (`.env.local` is git-ignored; the compose file and the rest of the repo contain only variable references, no private paths or credentials). Compose does not auto-load that filename, so every command below carries `--env-file .env.local`:
 
 ```
 GEO_DATA_DIR=<GEO_ROOT>/GEO_Download/data
@@ -139,9 +139,25 @@ CONDA_ROOT=<conda base dir, e.g. $(conda info --base)>
 AIRFLOW_UID=$(id -u)
 _AIRFLOW_WWW_USER_USERNAME=<airflow_username>
 _AIRFLOW_WWW_USER_PASSWORD=<airflow_password>
+SUPABASE_DB_USER=postgres.<project-ref>
+SUPABASE_DB_PASSWORD=<supabase_db_password>
+SUPABASE_DB_HOST=<pooler host>
+SUPABASE_DB_PORT=6543
+SUPABASE_DB_NAME=postgres
+AIRFLOW_DB_SCHEMA=geo_airflow
 ```
 
-> **Important:** `docker compose --env-file .env.local` refuses to start with a clear error when `GEO_ROOT`, `CONDA_ROOT` or the two `_AIRFLOW_WWW_USER_*` credentials are missing — all are required: the sibling projects and conda are bind-mounted **at their host paths** inside the containers so that `conda run -n <env>` (absolute env shebangs) and the `cd ..;cd GEO_*` commands keep resolving, and `airflow-init` creates the web UI admin user from the credentials.
+> **Important:** `docker compose --env-file .env.local` refuses to start with a clear error when `GEO_ROOT`, `CONDA_ROOT`, the two `_AIRFLOW_WWW_USER_*` credentials or any `SUPABASE_DB_*` value are missing — all are required: the sibling projects and conda are bind-mounted **at their host paths** inside the containers so that `conda run -n <env>` (absolute env shebangs) and the `cd ..;cd GEO_*` commands keep resolving, `airflow-init` creates the web UI admin user from the credentials, and the `SUPABASE_DB_*` values build the metadata-DB connection string.
+
+**Where every value comes from** (fresh clone from GitHub, no sibling `GEO_ETL` checkout):
+
+1. `GEO_ROOT`, `GEO_DATA_DIR`, `CONDA_ROOT`, `AIRFLOW_UID` — **nothing to set by hand**: `./setup.sh` derives all four from this checkout (`id -u`, `conda info --base`, the parent dir of the clone); only a missing conda is prompted.
+2. `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` — prompted (defaults `airflow_admin` / `airflow_admin`); this is the login of the Airflow web UI.
+3. `SUPABASE_DB_USER`, `SUPABASE_DB_HOST`, `SUPABASE_DB_PORT`, `SUPABASE_DB_NAME` — from the [Supabase dashboard](https://supabase.com/dashboard): open the project → **Connect** → *Connection pooling* → **Transaction pooler**, then copy **Host**, **Port** (`6543`), **Database** (`postgres`) and **User** (`postgres.<project-ref>`).
+4. `SUPABASE_DB_PASSWORD` — **never shown in the dashboard**: use the one saved when the project was created, or **Project Settings → Database → Generate password** (this immediately invalidates the old password — update every other client, e.g. GEO_ETL, at the same time).
+5. `AIRFLOW_DB_SCHEMA` — leave `geo_airflow`; `airflow-init` creates that schema on first start, so every Airflow table lands there.
+
+> Already have the sibling `GEO_ETL` checkout? `./setup.sh` copies all five `SUPABASE_DB_*` values from `../GEO_ETL/.env` for you — nothing to look up. Full walkthrough, URL anatomy and troubleshooting: [Configuration → Supabase metadata DB](docs/configuration.md#supabase-metadata-db-envlocal).
 
 ### 3. Start services with Docker Compose
 
@@ -153,8 +169,7 @@ This starts:
 
 | Service | Ports | Purpose |
 |---------|-------|---------|
-| `airflow-postgres` | 5472 | Airflow metadata database |
-| `airflow-init` | – | One-shot: DB migration, admin user creation (exits 0) |
+| `airflow-init` | – | One-shot: schema creation + DB migration, admin user creation (exits 0) |
 | `airflow-dag-processor` | – | Parses `geo_pipeline.py` |
 | `airflow-scheduler` | – | Triggers the DAG and runs its tasks (LocalExecutor) |
 | `airflow-api-server` | 8090 | Airflow REST API + web UI |
@@ -165,7 +180,7 @@ This starts:
 **Airflow UI:** http://localhost:8090 (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env.local`)
 **Spark Web UI:** http://localhost:8083
 
-> The Airflow containers use `network_mode: host`, so task subprocesses reach the Spark master at `spark://localhost:7078` (the address in `../GEO_ETL/config.json`) and your host conda envs via their bind-mounted absolute paths. Postgres stays on the bridge network with host port `5472` — Airflow reaches it at `127.0.0.1:5472`.
+> The Airflow containers use `network_mode: host`, so task subprocesses reach the Spark master at `spark://localhost:7078` (the address in `../GEO_ETL/config.json`) and your host conda envs via their bind-mounted absolute paths. Airflow's metadata DB is the **Supabase** Postgres in `.env.local`: the containers reach it over the host network with TLS (`sslmode=require`), and every connection pins `search_path` to the `geo_airflow` schema that `airflow-init` creates on first start — there is no local Postgres container anymore (the old one's data volume `geo_e2e_postgres_data` is kept as a backup until you prune it).
 
 ### 4. Nothing else to configure — pools and unpausing are automatic
 

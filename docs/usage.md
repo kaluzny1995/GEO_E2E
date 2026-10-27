@@ -12,7 +12,7 @@ Everything runs inside Docker Compose — no local worker/beat processes:
 docker compose --env-file .env.local up -d --build
 ```
 
-This builds the Airflow image (first run only) and starts Postgres, the one-shot `airflow-init` (DB migration + admin user), the DAG processor, the scheduler and the API server, plus the Spark cluster. Follow the scheduler to watch task execution:
+This builds the Airflow image (first run only) and starts the one-shot `airflow-init` (Supabase schema creation, DB migration, admin user, pool seeding), the DAG processor, the scheduler and the API server, plus the Spark cluster. Follow the scheduler to watch task execution:
 
 ```bash
 docker compose --env-file .env.local logs -f airflow-scheduler
