@@ -1,6 +1,7 @@
 [
   {
     "name": "DOWNLOAD-USGS_Earthquake",
+    "task_id": "USGS_Earthquake.download",
     "source_name": "USGS_Earthquake",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -11,6 +12,7 @@
   },
   {
     "name": "INGESTION-usgs_earthquake",
+    "task_id": "USGS_Earthquake.ingestion",
     "source_name": "USGS_Earthquake",
     "job_type": "INGESTION",
     "table_name": "usgs_earthquake",
@@ -22,6 +24,7 @@
   },
   {
     "name": "DATA_QUALITY-usgs_earthquake",
+    "task_id": "USGS_Earthquake.data_quality",
     "source_name": "USGS_Earthquake",
     "job_type": "DATA_QUALITY",
     "table_name": "usgs_earthquake",
@@ -30,6 +33,7 @@
   },
   {
     "name": "SINGLE_ETL-usgs_earthquake_etl",
+    "task_id": "USGS_Earthquake.single_etl",
     "source_name": "USGS_Earthquake",
     "job_type": "SINGLE_ETL",
     "table_name": "usgs_earthquake_etl",
@@ -40,6 +44,7 @@
   },
   {
     "name": "DATA_QUALITY-usgs_earthquake_etl",
+    "task_id": "USGS_Earthquake_etl.data_quality",
     "source_name": "USGS_Earthquake",
     "job_type": "DATA_QUALITY",
     "table_name": "usgs_earthquake_etl",
@@ -48,6 +53,7 @@
   },
   {
     "name": "DOWNLOAD-GDACS",
+    "task_id": "GDACS.download",
     "source_name": "GDACS",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -58,6 +64,7 @@
   },
   {
     "name": "INGESTION-gdacs_event",
+    "task_id": "GDACS.ingestion",
     "source_name": "GDACS",
     "job_type": "INGESTION",
     "table_name": "gdacs_event",
@@ -69,6 +76,7 @@
   },
   {
     "name": "DATA_QUALITY-gdacs_event",
+    "task_id": "GDACS.data_quality",
     "source_name": "GDACS",
     "job_type": "DATA_QUALITY",
     "table_name": "gdacs_event",
@@ -77,6 +85,7 @@
   },
   {
     "name": "SINGLE_ETL-gdacs_event_etl",
+    "task_id": "GDACS.single_etl",
     "source_name": "GDACS",
     "job_type": "SINGLE_ETL",
     "table_name": "gdacs_event_etl",
@@ -87,6 +96,7 @@
   },
   {
     "name": "DATA_QUALITY-gdacs_event_etl",
+    "task_id": "GDACS_etl.data_quality",
     "source_name": "GDACS",
     "job_type": "DATA_QUALITY",
     "table_name": "gdacs_event_etl",
@@ -95,6 +105,7 @@
   },
   {
     "name": "DOWNLOAD-EONET",
+    "task_id": "EONET.download",
     "source_name": "EONET",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -105,6 +116,7 @@
   },
   {
     "name": "INGESTION-eonet_event",
+    "task_id": "EONET.ingestion",
     "source_name": "EONET",
     "job_type": "INGESTION",
     "table_name": "eonet_event",
@@ -116,6 +128,7 @@
   },
   {
     "name": "DATA_QUALITY-eonet_event",
+    "task_id": "EONET.data_quality",
     "source_name": "EONET",
     "job_type": "DATA_QUALITY",
     "table_name": "eonet_event",
@@ -124,6 +137,7 @@
   },
   {
     "name": "SINGLE_ETL-eonet_event_etl",
+    "task_id": "EONET.single_etl",
     "source_name": "EONET",
     "job_type": "SINGLE_ETL",
     "table_name": "eonet_event_etl",
@@ -134,6 +148,7 @@
   },
   {
     "name": "DATA_QUALITY-eonet_event_etl",
+    "task_id": "EONET_etl.data_quality",
     "source_name": "EONET",
     "job_type": "DATA_QUALITY",
     "table_name": "eonet_event_etl",
@@ -142,6 +157,7 @@
   },
   {
     "name": "DOWNLOAD-OpenMeteo_Flood",
+    "task_id": "OpenMeteo_Flood.download",
     "source_name": "OpenMeteo_Flood",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -152,6 +168,7 @@
   },
   {
     "name": "INGESTION-openmeteo_flood",
+    "task_id": "OpenMeteo_Flood.ingestion",
     "source_name": "OpenMeteo_Flood",
     "job_type": "INGESTION",
     "table_name": "openmeteo_flood",
@@ -163,6 +180,7 @@
   },
   {
     "name": "DATA_QUALITY-openmeteo_flood",
+    "task_id": "OpenMeteo_Flood.data_quality",
     "source_name": "OpenMeteo_Flood",
     "job_type": "DATA_QUALITY",
     "table_name": "openmeteo_flood",
@@ -171,6 +189,7 @@
   },
   {
     "name": "SINGLE_ETL-openmeteo_flood_etl",
+    "task_id": "OpenMeteo_Flood.single_etl",
     "source_name": "OpenMeteo_Flood",
     "job_type": "SINGLE_ETL",
     "table_name": "openmeteo_flood_etl",
@@ -181,6 +200,7 @@
   },
   {
     "name": "DATA_QUALITY-openmeteo_flood_etl",
+    "task_id": "OpenMeteo_Flood_etl.data_quality",
     "source_name": "OpenMeteo_Flood",
     "job_type": "DATA_QUALITY",
     "table_name": "openmeteo_flood_etl",
@@ -189,6 +209,7 @@
   },
   {
     "name": "DOWNLOAD-USGS_NWIS",
+    "task_id": "USGS_NWIS.download",
     "source_name": "USGS_NWIS",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -199,6 +220,7 @@
   },
   {
     "name": "INGESTION-usgs_nwis",
+    "task_id": "USGS_NWIS.ingestion",
     "source_name": "USGS_NWIS",
     "job_type": "INGESTION",
     "table_name": "usgs_nwis",
@@ -210,6 +232,7 @@
   },
   {
     "name": "DATA_QUALITY-usgs_nwis",
+    "task_id": "USGS_NWIS.data_quality",
     "source_name": "USGS_NWIS",
     "job_type": "DATA_QUALITY",
     "table_name": "usgs_nwis",
@@ -218,6 +241,7 @@
   },
   {
     "name": "SINGLE_ETL-usgs_nwis_etl",
+    "task_id": "USGS_NWIS.single_etl",
     "source_name": "USGS_NWIS",
     "job_type": "SINGLE_ETL",
     "table_name": "usgs_nwis_etl",
@@ -228,6 +252,7 @@
   },
   {
     "name": "DATA_QUALITY-usgs_nwis_etl",
+    "task_id": "USGS_NWIS_etl.data_quality",
     "source_name": "USGS_NWIS",
     "job_type": "DATA_QUALITY",
     "table_name": "usgs_nwis_etl",
@@ -236,6 +261,7 @@
   },
   {
     "name": "DOWNLOAD-Avalanche_ORG",
+    "task_id": "Avalanche_ORG.download",
     "source_name": "Avalanche_ORG",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -246,6 +272,7 @@
   },
   {
     "name": "INGESTION-avalanche_org",
+    "task_id": "Avalanche_ORG.ingestion",
     "source_name": "Avalanche_ORG",
     "job_type": "INGESTION",
     "table_name": "avalanche_org",
@@ -257,6 +284,7 @@
   },
   {
     "name": "DATA_QUALITY-avalanche_org",
+    "task_id": "Avalanche_ORG.data_quality",
     "source_name": "Avalanche_ORG",
     "job_type": "DATA_QUALITY",
     "table_name": "avalanche_org",
@@ -265,6 +293,7 @@
   },
   {
     "name": "SINGLE_ETL-avalanche_org_etl",
+    "task_id": "Avalanche_ORG.single_etl",
     "source_name": "Avalanche_ORG",
     "job_type": "SINGLE_ETL",
     "table_name": "avalanche_org_etl",
@@ -275,6 +304,7 @@
   },
   {
     "name": "DATA_QUALITY-avalanche_org_etl",
+    "task_id": "Avalanche_ORG_etl.data_quality",
     "source_name": "Avalanche_ORG",
     "job_type": "DATA_QUALITY",
     "table_name": "avalanche_org_etl",
@@ -283,6 +313,7 @@
   },
   {
     "name": "DOWNLOAD-IBTrACS",
+    "task_id": "IBTrACS.download",
     "source_name": "IBTrACS",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -293,6 +324,7 @@
   },
   {
     "name": "INGESTION-ibtracs_cyclone",
+    "task_id": "IBTrACS.ingestion",
     "source_name": "IBTrACS",
     "job_type": "INGESTION",
     "table_name": "ibtracs_cyclone",
@@ -304,6 +336,7 @@
   },
   {
     "name": "DATA_QUALITY-ibtracs_cyclone",
+    "task_id": "IBTrACS.data_quality",
     "source_name": "IBTrACS",
     "job_type": "DATA_QUALITY",
     "table_name": "ibtracs_cyclone",
@@ -312,6 +345,7 @@
   },
   {
     "name": "SINGLE_ETL-ibtracs_cyclone_etl",
+    "task_id": "IBTrACS.single_etl",
     "source_name": "IBTrACS",
     "job_type": "SINGLE_ETL",
     "table_name": "ibtracs_cyclone_etl",
@@ -322,6 +356,7 @@
   },
   {
     "name": "DATA_QUALITY-ibtracs_cyclone_etl",
+    "task_id": "IBTrACS_etl.data_quality",
     "source_name": "IBTrACS",
     "job_type": "DATA_QUALITY",
     "table_name": "ibtracs_cyclone_etl",
@@ -330,6 +365,7 @@
   },
   {
     "name": "DOWNLOAD-USGS_Volcano",
+    "task_id": "USGS_Volcano.download",
     "source_name": "USGS_Volcano",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -340,6 +376,7 @@
   },
   {
     "name": "INGESTION-usgs_volcano",
+    "task_id": "USGS_Volcano.ingestion",
     "source_name": "USGS_Volcano",
     "job_type": "INGESTION",
     "table_name": "usgs_volcano",
@@ -351,6 +388,7 @@
   },
   {
     "name": "DATA_QUALITY-usgs_volcano",
+    "task_id": "USGS_Volcano.data_quality",
     "source_name": "USGS_Volcano",
     "job_type": "DATA_QUALITY",
     "table_name": "usgs_volcano",
@@ -359,6 +397,7 @@
   },
   {
     "name": "SINGLE_ETL-usgs_volcano_etl",
+    "task_id": "USGS_Volcano.single_etl",
     "source_name": "USGS_Volcano",
     "job_type": "SINGLE_ETL",
     "table_name": "usgs_volcano_etl",
@@ -369,6 +408,7 @@
   },
   {
     "name": "DATA_QUALITY-usgs_volcano_etl",
+    "task_id": "USGS_Volcano_etl.data_quality",
     "source_name": "USGS_Volcano",
     "job_type": "DATA_QUALITY",
     "table_name": "usgs_volcano_etl",
@@ -377,6 +417,7 @@
   },
   {
     "name": "DOWNLOAD-NIFC",
+    "task_id": "NIFC.download",
     "source_name": "NIFC",
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
@@ -387,6 +428,7 @@
   },
   {
     "name": "INGESTION-nifc_fire",
+    "task_id": "NIFC.ingestion",
     "source_name": "NIFC",
     "job_type": "INGESTION",
     "table_name": "nifc_fire",
@@ -398,6 +440,7 @@
   },
   {
     "name": "DATA_QUALITY-nifc_fire",
+    "task_id": "NIFC.data_quality",
     "source_name": "NIFC",
     "job_type": "DATA_QUALITY",
     "table_name": "nifc_fire",
@@ -406,6 +449,7 @@
   },
   {
     "name": "SINGLE_ETL-nifc_fire_etl",
+    "task_id": "NIFC.single_etl",
     "source_name": "NIFC",
     "job_type": "SINGLE_ETL",
     "table_name": "nifc_fire_etl",
@@ -416,6 +460,7 @@
   },
   {
     "name": "DATA_QUALITY-nifc_fire_etl",
+    "task_id": "NIFC_etl.data_quality",
     "source_name": "NIFC",
     "job_type": "DATA_QUALITY",
     "table_name": "nifc_fire_etl",
@@ -424,6 +469,7 @@
   },
   {
     "name": "SINGLE_ETL-union_etl",
+    "task_id": "Union.single_etl",
     "source_name": "Union",
     "job_type": "SINGLE_ETL",
     "table_name": "union_etl",
@@ -451,6 +497,7 @@
   },
   {
     "name": "DATA_QUALITY-union_etl",
+    "task_id": "Union_etl.data_quality",
     "source_name": "Union",
     "job_type": "DATA_QUALITY",
     "table_name": "union_etl",
@@ -459,6 +506,7 @@
   },
   {
     "name": "VIEW-metrics_avalanche_vw",
+    "task_id": "View.metrics_avalanche_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_avalanche_vw",
@@ -467,6 +515,7 @@
   },
   {
     "name": "VIEW-metrics_drought_vw",
+    "task_id": "View.metrics_drought_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_drought_vw",
@@ -475,6 +524,7 @@
   },
   {
     "name": "VIEW-metrics_earthquake_vw",
+    "task_id": "View.metrics_earthquake_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_earthquake_vw",
@@ -483,6 +533,7 @@
   },
   {
     "name": "VIEW-metrics_fire_vw",
+    "task_id": "View.metrics_fire_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_fire_vw",
@@ -491,6 +542,7 @@
   },
   {
     "name": "VIEW-metrics_flood_vw",
+    "task_id": "View.metrics_flood_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_flood_vw",
@@ -499,6 +551,7 @@
   },
   {
     "name": "VIEW-metrics_iceberg_vw",
+    "task_id": "View.metrics_iceberg_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_iceberg_vw",
@@ -507,6 +560,7 @@
   },
   {
     "name": "VIEW-metrics_storm_vw",
+    "task_id": "View.metrics_storm_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_storm_vw",
@@ -515,6 +569,7 @@
   },
   {
     "name": "VIEW-metrics_volcano_vw",
+    "task_id": "View.metrics_volcano_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "metrics_volcano_vw",
@@ -523,6 +578,7 @@
   },
   {
     "name": "VIEW-phenomenons_us_vw",
+    "task_id": "View.phenomenons_us_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_us_vw",
@@ -531,6 +587,7 @@
   },
   {
     "name": "VIEW-phenomenons_ca_vw",
+    "task_id": "View.phenomenons_ca_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_ca_vw",
@@ -539,6 +596,7 @@
   },
   {
     "name": "VIEW-phenomenons_cs_amer_vw",
+    "task_id": "View.phenomenons_cs_amer_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_cs_amer_vw",
@@ -547,6 +605,7 @@
   },
   {
     "name": "VIEW-phenomenons_ru_vw",
+    "task_id": "View.phenomenons_ru_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_ru_vw",
@@ -555,6 +614,7 @@
   },
   {
     "name": "VIEW-phenomenons_europe_vw",
+    "task_id": "View.phenomenons_europe_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_europe_vw",
@@ -563,6 +623,7 @@
   },
   {
     "name": "VIEW-phenomenons_asia_vw",
+    "task_id": "View.phenomenons_asia_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_asia_vw",
@@ -571,6 +632,7 @@
   },
   {
     "name": "VIEW-phenomenons_africa_vw",
+    "task_id": "View.phenomenons_africa_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_africa_vw",
@@ -579,6 +641,7 @@
   },
   {
     "name": "VIEW-phenomenons_aus_oc_vw",
+    "task_id": "View.phenomenons_aus_oc_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_aus_oc_vw",
@@ -587,6 +650,7 @@
   },
   {
     "name": "VIEW-phenomenons_waters_vw",
+    "task_id": "View.phenomenons_waters_vw",
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_waters_vw",

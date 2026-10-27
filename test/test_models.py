@@ -162,6 +162,7 @@ def _dag_block() -> dict:
             "data_quality": "etl",
             "single_etl": "etl",
             "view": "etl",
+            "verdict": "etl",
         },
         "pool_slots": {"download": 3, "etl": 2},
     }
@@ -196,6 +197,7 @@ def test_dag_settings_pool_for_maps_every_job_type() -> None:
     assert settings.pool_for(EJobType.DATA_QUALITY) == "etl"
     assert settings.pool_for(EJobType.SINGLE_ETL) == "etl"
     assert settings.pool_for(EJobType.VIEW) == "etl"
+    assert settings.pool_for(EJobType.VERDICT) == "etl"
 
 
 def test_dag_settings_unknown_timezone_raises(tmp_path: Path) -> None:

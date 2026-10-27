@@ -3,6 +3,7 @@ and the Airflow task specs derived from them."""
 
 import json
 import os
+import re
 from datetime import date
 from enum import StrEnum
 from typing import Literal
@@ -24,6 +25,8 @@ class EJobType(StrEnum):
     DATA_QUALITY = "DATA_QUALITY"
     SINGLE_ETL = "SINGLE_ETL"
     VIEW = "VIEW"
+    # Not a jobs.json type — build_task_specs() synthesizes the verdict task with it
+    VERDICT = "VERDICT"
 
 
 class JobTypeConfig(BaseModel):
@@ -72,6 +75,7 @@ class PoolConfig(BaseModel):
     data_quality: str
     single_etl: str
     view: str
+    verdict: str
 
     model_config = ConfigDict(frozen=True)
 
@@ -112,6 +116,7 @@ class DagSettings(BaseModel):
             EJobType.DATA_QUALITY: self.pools.data_quality,
             EJobType.SINGLE_ETL: self.pools.single_etl,
             EJobType.VIEW: self.pools.view,
+            EJobType.VERDICT: self.pools.verdict,
         }[job_type]
 
 
@@ -124,12 +129,15 @@ def get_dag_settings() -> DagSettings:
 class Job(BaseModel):
     """A single job of the flat jobs.json registry — referenced by other jobs via its `name`.
 
-    A job either carries a `schedule` (a *scheduled* job: a pipeline root that starts on that
-    cron) or omits it (a *downstreamed* job: it starts when the job referencing it in
-    `next_jobs` finishes). `is_next_skipped_if_error` is kept for documentation (the DAG maps
-    it to Airflow's `all_success` trigger rule, so it is not consulted at runtime)."""
+    `task_id` is the Airflow task id this job becomes — the names are *data*, declared per job
+    in jobs.json instead of derived from the chain shape (`NIFC.single_etl`, `NIFC_etl.data_quality`,
+    `View.metrics_flood_vw`). A job either carries a `schedule` (a *scheduled* job: a pipeline
+    root that starts on that cron) or omits it (a *downstreamed* job: it starts when the job
+    referencing it in `next_jobs` finishes). `is_next_skipped_if_error` is kept for documentation
+    (the DAG maps it to Airflow's `all_success` trigger rule, so it is not consulted at runtime)."""
 
     name: str
+    task_id: str
     source_name: str
     job_type: EJobType
     table_name: str | None = None
@@ -139,13 +147,30 @@ class Job(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    @field_validator("task_id")
+    @classmethod
+    def _valid_task_id(cls, value: str) -> str:
+        """Reject task ids Airflow (or the DAG's own id joins) cannot handle, at config load."""
+        if not re.fullmatch(r"[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*", value):
+            raise ValueError(
+                f"invalid task_id {value!r} — expected dot-separated segments of letters, "
+                "digits and underscores (e.g. NIFC.single_etl, View.metrics_flood_vw)"
+            )
+        return value
+
     def get_command(self) -> str:
         """Build the shell command of this job from the `job` block of config.json.
 
         Raises:
             ValueError: When a non-DOWNLOAD job (INGESTION, DATA_QUALITY, SINGLE_ETL or
-                VIEW) has no table_name configured in jobs.json.
+                VIEW) has no table_name configured in jobs.json, or when the job is a
+                VERDICT job (the verdict task is synthesized by build_task_specs()).
         """
+        if self.job_type == EJobType.VERDICT:
+            raise ValueError(
+                "a VERDICT job has no shell command — build_task_specs() synthesizes the verdict task itself"
+            )
+
         job_config = get_job_config()
 
         # DOWNLOAD takes the source name as its only argument; the other types take (job_type, table_name)
@@ -179,8 +204,9 @@ class TaskSpec(BaseModel):
     command: str
     # Task ids of the parent jobs (empty for a chain's root job)
     upstream: tuple[str, ...] = ()
-    # all_success for source-chain jobs; all_done_min_one_success for the union root only
-    trigger_rule: Literal["all_success", "all_done_min_one_success"] = "all_success"
+    # all_success for source-chain jobs; all_done_min_one_success for the union root;
+    # all_done for the verdict task (it reads the union result after every task finished)
+    trigger_rule: Literal["all_success", "all_done_min_one_success", "all_done"] = "all_success"
 
     model_config = ConfigDict(frozen=True)
 
@@ -195,15 +221,23 @@ def _index_jobs(jobs: list[Job]) -> tuple[dict[str, Job], list[Job]]:
     """Index the flat jobs by name and validate the reference graph.
 
     Returns the name -> job index and the root jobs (the ones no other job references),
-    in file order. Raises ValueError on duplicate names, unknown `next_jobs` references,
-    jobs referenced by more than one parent, dependency cycles, or a scheduled job that
-    also has a parent (scheduled jobs start on their own cron, not from another job).
+    in file order. Raises ValueError on duplicate names, duplicate task ids, unknown
+    `next_jobs` references, jobs referenced by more than one parent, dependency cycles,
+    or a scheduled job that also has a parent (scheduled jobs start on their own cron,
+    not from another job).
     """
     jobs_by_name: dict[str, Job] = {}
+    task_id_owner: dict[str, str] = {}
     for job in jobs:
         if job.name in jobs_by_name:
             raise ValueError(f'jobs.json has duplicate job name "{job.name}"')
+        if job.task_id in task_id_owner:
+            raise ValueError(
+                f'jobs.json has duplicate task_id "{job.task_id}" — claimed by '
+                f'"{task_id_owner[job.task_id]}" and "{job.name}" (Airflow task ids must be unique)'
+            )
         jobs_by_name[job.name] = job
+        task_id_owner[job.task_id] = job.name
 
     # next_jobs forms a tree: every child must be claimed by exactly one parent
     parent_of: dict[str, str] = {}
@@ -240,21 +274,14 @@ def _index_jobs(jobs: list[Job]) -> tuple[dict[str, Job], list[Job]]:
     return jobs_by_name, [job for job in jobs if job.name not in parent_of]
 
 
-def _walk_chain(jobs_by_name: dict[str, Job], job: Job, parent_id: str | None, path: tuple[str, ...]) -> list[TaskSpec]:
+def _walk_chain(jobs_by_name: dict[str, Job], job: Job, parent_id: str | None) -> list[TaskSpec]:
     """Depth-first walk of one chain of the flat job registry.
 
-    Returns the task specs of the visited subtree. Task ids follow the
-    job-type path inside the chain, skipping the DOWNLOAD prefix (`NIFC.ingestion.single_etl`).
+    Returns the task specs of the visited subtree. Task ids are the `task_id` fields of
+    jobs.json — the config names every task explicitly, the chain only decides the edges
+    (`NIFC.download` -> `NIFC.ingestion` -> `NIFC.single_etl`).
     """
-    # The chain root's DOWNLOAD is not part of its children's id prefix (NIFC.ingestion, not NIFC.download.ingestion)
-    id_path = tuple(job_type for job_type in path if job_type != EJobType.DOWNLOAD.lower())
-    task_path = (*id_path, job.job_type.lower())
-    # VIEW jobs run side by side under one parent (the shipped registry stacks 17 of them under
-    # the union single_etl) — the script name keeps their sibling ids unique
-    # (Union.single_etl.view.metrics_flood_vw, not Union.single_etl.view)
-    if job.job_type == EJobType.VIEW and job.table_name is not None:
-        task_path = (*task_path, job.table_name)
-    task_id = ".".join((job.source_name, *task_path))
+    task_id = job.task_id
     spec = TaskSpec(
         task_id=task_id,
         source_name=job.source_name,
@@ -265,7 +292,7 @@ def _walk_chain(jobs_by_name: dict[str, Job], job: Job, parent_id: str | None, p
 
     specs = [spec]
     for child_name in job.next_jobs:
-        specs.extend(_walk_chain(jobs_by_name, jobs_by_name[child_name], task_id, task_path))
+        specs.extend(_walk_chain(jobs_by_name, jobs_by_name[child_name], task_id))
     return specs
 
 
@@ -290,6 +317,27 @@ def resolve_schedule() -> str:
     return schedules[0]
 
 
+def _verdict_command(union_root_task_id: str) -> str:
+    """Shell command of the verdict task — a Jinja template the BashOperator renders right before it runs.
+
+    `all_done` guarantees every other task of the DAG reached a terminal state by then, so
+    `ti.get_task_states()` (the Airflow task SDK — a comms call the supervisor serves in real
+    runs and in `airflow tasks test`) can read the union root's state of the *current* run:
+    the command exits 0 only when it is `success`, 1 otherwise (including a missing TI).
+    """
+    return (
+        "{% set task = '" + union_root_task_id + "' %}\n"
+        "{% set state = ti.get_task_states(ti.dag_id, task_ids=[task], run_ids=[run_id]).get(run_id, {})"
+        ".get(task) %}\n"
+        "{% if state == 'success' %}\n"
+        'echo "verdict: {{ task }} = {{ state }} -> DAG run succeeds"\n'
+        "{% else %}\n"
+        'echo "verdict: {{ task }} = {{ state }} -> DAG run fails" >&2\n'
+        "exit 1\n"
+        "{% endif %}\n"
+    )
+
+
 def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
     """Flatten the flat job registry of jobs.json into the Airflow task specs of the mega-DAG.
 
@@ -300,15 +348,32 @@ def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
     it waits for the SINGLE_ETL task of every source chain with `all_done_min_one_success` —
     it starts whatever the chains' results, but only when at least one single-ETL succeeded
     (with none, the scheduler marks it `upstream_failed` — nothing fresh to stack). The
-    DATA_QUALITY jobs stay terminal steps with no successors, like in the old Celery chains;
-    so do the VIEW jobs the union root chains on (they only read the freshly stacked table).
+    DATA_QUALITY jobs stay terminal steps of the registry (nothing chains from them), like in
+    the old Celery chains; so do the VIEW jobs the union root chains on (they only read the
+    freshly stacked table) — only the synthesized verdict task below waits on every task.
+
+    On top of the registry's specs the function appends the synthesized verdict task
+    (`<union_source>.verdict`, job type VERDICT): it waits for **every** registry task with
+    `all_done` and exits 0 only when the union root finished `success`. Airflow derives a
+    run's state from its *leaf* tasks — the verdict has no successors and swallows every
+    former leaf, so it alone decides whether the DAG run succeeded.
 
     Raises:
         ValueError: When jobs.json has no single root job for *union_source*, a non-union root
-            is not scheduled, the union job itself is scheduled, or the reference graph is
-            invalid (see `_index_jobs`).
+            is not scheduled, the union job itself is scheduled, the registry declares a
+            VERDICT job, a job claims the reserved verdict task id, or the reference graph
+            is invalid (see `_index_jobs`).
     """
-    jobs_by_name, roots = _index_jobs(load_jobs())
+    jobs = load_jobs()
+    if any(job.job_type == EJobType.VERDICT for job in jobs):
+        raise ValueError("jobs.json must not declare a VERDICT job — build_task_specs() synthesizes the verdict task")
+    verdict_id = f"{union_source}.verdict"
+    reserved = next((job.name for job in jobs if job.task_id == verdict_id), None)
+    if reserved is not None:
+        raise ValueError(
+            f'job "{reserved}" uses task_id "{verdict_id}" — that id is reserved for the synthesized verdict task'
+        )
+    jobs_by_name, roots = _index_jobs(jobs)
 
     union_roots = [job for job in roots if job.source_name == union_source]
     if not union_roots:
@@ -335,7 +400,7 @@ def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
     single_etl_ids: list[str] = []
 
     for root in roots:
-        walked = _walk_chain(jobs_by_name, root, parent_id=None, path=())
+        walked = _walk_chain(jobs_by_name, root, parent_id=None)
         if root.name in union_names:
             union_specs = walked
         else:
@@ -345,10 +410,23 @@ def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
     # The union root — the chain's only parentless spec — waits for every source's SINGLE_ETL
     # task; its child keeps the plain parent link and the default all_success rule
     fan_in = tuple(single_etl_ids)
+    union_root_id = next(spec.task_id for spec in union_specs if not spec.upstream)
     union_specs = [
         spec.model_copy(update={"upstream": fan_in, "trigger_rule": "all_done_min_one_success"})
         if not spec.upstream
         else spec
         for spec in union_specs
     ]
-    return specs + union_specs
+    registry_specs = specs + union_specs
+
+    # The verdict task: downstream of every registry task (so it is the DAG's only leaf — and
+    # only leaf tasks decide a run's state) and gated on the union root's state by its command
+    verdict = TaskSpec(
+        task_id=verdict_id,
+        source_name=union_source,
+        job_type=EJobType.VERDICT,
+        command=_verdict_command(union_root_id),
+        upstream=tuple(spec.task_id for spec in registry_specs),
+        trigger_rule="all_done",
+    )
+    return [*registry_specs, verdict]

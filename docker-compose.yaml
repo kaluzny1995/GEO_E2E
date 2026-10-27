@@ -21,7 +21,12 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_ISSUER: airflow
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_HOME: /opt/airflow
-    HOME: /opt/airflow
+    # Deliberately NO HOME override: the image installs Airflow in the /home/airflow/.local
+    # venv, and the `airflow` console script (base-python shebang) resolves its package via
+    # the HOME user-site — HOME=/opt/airflow points it at a nonexistent /opt/airflow/.local,
+    # so every *restarted* service dies on the entrypoint's `airflow db check`
+    # (the entrypoint only fixes HOME itself on a container's first start, when its uid is
+    # still missing from /etc/passwd). AIRFLOW_HOME alone pins the data/logs to the volume.
     CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env.local (run ./setup.sh)}
   volumes:
     # Mounted at the same absolute path inside the container so conda env shebangs
@@ -96,9 +101,9 @@ services:
         condition: service_completed_successfully
     command: scheduler
     restart: always
-    # `python -m airflow` (not the `airflow` console script): healthchecks bypass /entrypoint,
-    # so HOME stays /opt/airflow and the script's interpreter can't resolve the image's
-    # /home/airflow/.local install — PATH `python` resolves that prefix via pyvenv.cfg.
+    # `python -m airflow` rather than the `airflow` console script: healthchecks bypass
+    # /entrypoint, so use the interpreter that resolves the image's /home/airflow/.local venv
+    # directly via pyvenv.cfg — independent of whatever HOME the healthcheck environment has.
     healthcheck:
       test: ["CMD-SHELL", "python -m airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
       interval: 30s

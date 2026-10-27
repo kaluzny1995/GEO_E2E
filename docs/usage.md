@@ -20,6 +20,8 @@ docker compose --env-file .env.local logs -f airflow-scheduler
 
 > The Airflow containers use `network_mode: host`, so task subprocesses reach Spark at `spark://localhost:7078` and your host conda envs via their bind-mounted absolute paths. See [README — Setup](../README.md#3-start-services-with-docker-compose).
 
+> **Troubleshooting — services crash-looping with `ModuleNotFoundError: No module named 'airflow'`:** this comes from the entrypoint's `airflow db check` when `docker-compose.yaml` sets `HOME: /opt/airflow`. The `airflow` console script resolves its packages through the *HOME* user-site, while the image installs Airflow in `/home/airflow/.local`; the entrypoint only self-corrects `HOME` on a container's **first** start (when its uid is still missing from `/etc/passwd`), so every *restarted* service dies. Do not add a `HOME` override to the compose services — `AIRFLOW_HOME: /opt/airflow` alone keeps data/logs on the volume (see the comment in `docker-compose.yaml`).
+
 ## The web UI
 
 Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env.local`):
@@ -28,7 +30,7 @@ Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin`
 |------|------------|
 | **DAGs** | `geo_pipeline` is unpaused from the start (`dags_are_paused_at_creation=false`); see next/last run |
 | **Grid** view of a run | per-task state: green = success, red = failed, grey = skipped (downstream of a failure), light green = running |
-| **Graph** view | the full task graph — 64 tasks: 9 chains of 5 + the union chain (fan-in + data quality + 17 views) |
+| **Graph** view | the full task graph — 65 tasks: 9 chains of 5 + the union chain (fan-in + data quality + 17 views) + the `Union.verdict` task |
 | **Gantt** view | task durations over the run |
 | Task log | the full stdout/stderr of the task's `conda run` subprocess (also includes the memory callback line) |
 | **Trigger DAG** | run the pipeline manually, without waiting for the 08:00 schedule |
@@ -43,6 +45,15 @@ Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin`
 ```bash
 docker compose --env-file .env.local run --rm airflow-cli dags trigger geo_pipeline
 ```
+
+The run's own status is decided by `Union.verdict`, the last task of the graph: once every
+other task reached a terminal state it reads `Union.single_etl`'s state of the run and exits 0
+only when the stack finished `success`. So a run is green iff the union stack succeeded — a red
+`DATA_QUALITY`/`VIEW` branch stays red as a task but does not fail the run, while a failed
+download or source single-ETL does. To re-rate a run after fixing the union task, **Clear**
+`Union.verdict` in the grid. (Mind that `tasks test geo_pipeline Union.verdict` exits 1 unless
+the tested run already holds a *successful* `Union.single_etl` task instance — it reads that
+state from the metadata DB.)
 
 **A single job** — two options:
 

@@ -14,7 +14,8 @@
       "ingestion": "etl",
       "data_quality": "etl",
       "single_etl": "etl",
-      "view": "etl"
+      "view": "etl",
+      "verdict": "etl"
     },
     "pool_slots": {
       "download": 3,

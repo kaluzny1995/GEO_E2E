@@ -1,6 +1,8 @@
 """Airflow DAG `geo_pipeline`: the E2E mega-DAG built by `geo_dag.GEO_DAG` — nine source
 subDAGs (download -> ingestion + data quality -> single_etl + data quality) plus the union
 subDAG (single_etl + data quality + the seventeen views), wired together by the union fan-in.
+A synthesized verdict task (`Union.verdict`) waits for every task and exits 0 only when the
+union single-ETL succeeded — as the DAG's only leaf it decides the run's state.
 The cron comes from the scheduled jobs of jobs.json; every other knob (timezone, retries,
 timeout, pools) from the `dag` block of config.json."""
 
@@ -25,7 +27,7 @@ _GEO_DAG = GEO_DAG(project_dir=_PROJECT_DIR)
 
 @dag(**_GEO_DAG.dag_kwargs())
 def geo_pipeline() -> None:
-    """Render every subDAG of `jobs.json` into this DAG and wire the union fan-in."""
+    """Render every subDAG of `jobs.json` into this DAG and wire the union fan-in + verdict."""
     _GEO_DAG.to_airflow()
 
 

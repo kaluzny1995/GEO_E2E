@@ -6,9 +6,11 @@ GIS Data End-to-End Pipeline — an Apache Airflow-based orchestrator that runs 
 
 GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it defines one Airflow DAG (`geo_pipeline`) whose tasks spawn subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality` (each run also refreshes that table's whole-table `overall` snapshot, so the pipelines need no separate `--overall` jobs), `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
 
-A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `ingestion.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The union chain then runs `DATA_QUALITY union_etl` to measure the freshly stacked table. Every DATA_QUALITY job is a terminal step with no successors (like in the old Celery chains).
+A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `<source>.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The union chain then runs `DATA_QUALITY union_etl` to measure the freshly stacked table. Every DATA_QUALITY job is a terminal step of `jobs.json` — no job chains from it (like in the old Celery chains); only the verdict gate described below waits on it.
 
-Seventeen `VIEW` jobs hang off that same `union_etl` task — siblings of the union data-quality step, running in parallel with it: each runs `GEO_ETL/run_etl.py VIEW <view_name>` to (re)create one view over `geo.union_etl` (the `metrics_*_vw` and `phenomenons_*_vw` views of GEO_ETL), so the views always reflect the newest stack. They are terminal steps too — nothing runs after them.
+Seventeen `VIEW` jobs hang off that same `union_etl` task — siblings of the union data-quality step, running in parallel with it: each runs `GEO_ETL/run_etl.py VIEW <view_name>` to (re)create one view over `geo.union_etl` (the `metrics_*_vw` and `phenomenons_*_vw` views of GEO_ETL), so the views always reflect the newest stack. They are terminal steps too — no job runs after them; the verdict gate waits on all of them.
+
+One task decides how the run itself is rated: the synthesized **verdict task** (`Union.verdict`) waits for every other task of the DAG (`all_done`) and reads `Union.single_etl`'s state of the run through the Airflow task SDK — it exits 0 only when the stack finished `success`. Airflow derives a run's success/failure from its *leaf* tasks, and the verdict is the DAG's only leaf (every other task waits for it), so the run is green iff the union stack succeeded: a failed download or source single-ETL still fails the run (the union root gets `upstream_failed`), while a failed `DATA_QUALITY` or `VIEW` task shows red as a task without turning the run red.
 
 Each data source's jobs live in the flat `jobs.json` registry (one object per job; `next_jobs` references the dependent jobs by `name`, same pattern as E2EReddit). `model.build_task_specs()` validates the registry and resolves it into Airflow task specs, which `geo_dag.GEO_DAG` groups into ten code-level subDAGs — one `geo_dag.JobsSubDAG` per source chain plus the union chain — and renders into `BashOperator`s of the single mega-DAG (`geo_pipeline.py` is only its `@dag` wrapper), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
 
@@ -24,8 +26,9 @@ PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped b
 
 - **Dependency-driven sequencing** — DOWNLOAD → INGESTION → (DATA_QUALITY, SINGLE_ETL → DATA_QUALITY) is expressed as DAG dependencies; no marker files, no polling.
 - **Web UI monitoring** — live grid/gantt/log view of every job at http://localhost:8090; failures show up as red tasks instead of hidden log warnings.
-- **Union fan-in with `all_done_min_one_success`** — the union job waits for all nine `ingestion.single_etl` tasks to reach a terminal state (whatever their results) and runs only if at least one succeeded; no deadline fallback needed, and the DATA_QUALITY jobs stay terminal (no successors).
-- **Views after the stack** — the seventeen `VIEW` jobs wait for the `union_etl` task with `all_success` and refresh the `metrics_*_vw` / `phenomenons_*_vw` views on the freshly stacked table.
+- **Union fan-in with `all_done_min_one_success`** — the union job waits for all nine `<source>.single_etl` tasks to reach a terminal state (whatever their results) and runs only if at least one succeeded; no deadline fallback needed, and the DATA_QUALITY jobs stay terminal (no job chains from them).
+- **Views after the stack** — the seventeen `VIEW` jobs wait for the `Union.single_etl` task with `all_success` and refresh the `metrics_*_vw` / `phenomenons_*_vw` views on the freshly stacked table.
+- **Union-only run state** — the synthesized `Union.verdict` leaf task waits for the whole DAG (`all_done`), reads `Union.single_etl`'s state and exits non-zero unless it succeeded — the run is rated by the union result alone, not by every one of the 65 tasks.
 - **Failure gating** — a failed task skips everything chained below it (`all_success` trigger rule = the old `is_stop_if_error` semantics), siblings unaffected.
 - **Pools** — at most 3 concurrent downloads and 2 concurrent ETL/Spark jobs.
 - **Timeouts, no retries** — every task is killed after 30 minutes (old `task_time_limit`) and never retried.
@@ -39,20 +42,24 @@ PostgreSQL (host port `5472`) stores Airflow's metadata; concurrency is capped b
 flowchart TD
     A[jobs.json] -->|build_task_specs| B[geo_pipeline.py]
     B -->|schedule 08:00 Europe/Warsaw| C[Airflow Scheduler]
-    C -->|pool: download (3 slots)| D[NIFC.download ... USGS_Earthquake.download]
+    C -->|pool: download, 3 slots| D[NIFC.download ... USGS_Earthquake.download]
     D -->|all_success| E[...ingestion]
-    E -->|all_success| F[...ingestion.data_quality]
-    E -->|all_success| G[...ingestion.single_etl]
-    G -->|all_success| H[...ingestion.single_etl.data_quality]
-    F -->|terminal| F2[no successors]
-    G -->|all_done_min_one_success (needs ≥1 success)| U[Union.single_etl]
-    H -->|terminal| H2[no successors]
+    E -->|all_success| F[...data_quality]
+    E -->|all_success| G[...single_etl]
+    G -->|all_success| H[...etl.data_quality]
+    F -->|terminal| F2[terminal branch]
+    G -->|all_done_min_one_success, needs ≥1 success| U[Union.single_etl]
+    H -->|terminal| H2[terminal branch]
     D -->|HTTP GET| I[USGS FDSN API]
     I -->|CSV| J[GEO_Download/run_download.py]
     E -->|JDBC + Spark| K[GEO_ETL/run_etl.py INGESTION / DATA_QUALITY / SINGLE_ETL]
     U -->|JDBC + Spark| L[geo.union_etl]
     U -->|all_success| UQ[Union data quality]
-    U -->|all_success| UV[Union views (17)]
+    U -->|all_success| UV[17 Union views]
+    UQ -.->|all_done| V[Union.verdict<br/>only leaf = run state]
+    UV -.->|all_done| V
+    F2 -.->|all_done| V
+    H2 -.->|all_done| V
     C -->|task logs| M[http://localhost:8090]
 ```
 

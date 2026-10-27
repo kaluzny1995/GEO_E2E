@@ -28,6 +28,7 @@ from util import log_memory_usage
 _TRIGGER_RULES = {
     "all_success": TriggerRule.ALL_SUCCESS,
     "all_done_min_one_success": TriggerRule.ALL_DONE_MIN_ONE_SUCCESS,
+    "all_done": TriggerRule.ALL_DONE,
 }
 # Callbacks receive a RuntimeTaskInstance without a .log attribute — log into the
 # task-configured "airflow.task" logger instead (its handler writes the task log)
@@ -48,7 +49,8 @@ every `docker compose up` (`docker/airflow/seed_pools.py`).
   grid still shows the flat chains of `jobs.json`.
 - A failed task skips its downstream jobs (`all_success` trigger rule) — same effect as the
   old `is_stop_if_error` chains, but visible as skipped in the UI.
-- The one dependency *between* subDAGs is the union fan-in: the union root (`Union.single_etl`)
+- The dependencies *between* subDAGs are the union fan-in and the verdict task's edges. The
+  union fan-in: the union root (`Union.single_etl`)
   waits for the `single_etl` task — the last job — of **every** source subDAG with
   `all_done_min_one_success`: it starts as soon as the last single-ETL reached a terminal
   state, whatever the chains' results — **but only if at least one of them succeeded**. When
@@ -58,6 +60,12 @@ every `docker compose up` (`docker/airflow/seed_pools.py`).
   like every other DATA_QUALITY job of the registry — plus the seventeen `Union.single_etl.view.*`
   tasks (siblings of that step, `all_success`, `etl` pool), each `run_etl.py VIEW <view_name>`
   refreshing one view over the freshly stacked `geo.union_etl`.
+- The run's state is decided by one task: the synthesized verdict task (`Union.verdict`). It
+  waits for every other task with `all_done`, reads `Union.single_etl`'s state of the run via
+  `ti.get_task_states()` and exits 0 only when it finished `success`. As the DAG's **only leaf**
+  (Airflow derives a run's success/failure from its leaf tasks) it alone turns the grid
+  green/red: a failed download or source single-ETL still fails the run (the union root gets
+  `upstream_failed`), a failed DATA_QUALITY, VIEW or other non-fan-in branch does not.
 
 Tasks come from the flat job registry in `jobs.json` via `model.build_task_specs()`; the shell
 commands come from the `job` block of `config.json` and run in the conda environments
@@ -76,8 +84,8 @@ class JobsSubDAG:
 
     A subDAG holds a *partial* view of the flat registry: the `TaskSpec`s of exactly one
     `source_name`, converted into `BashOperator`s and wired to their parents (`to_airflow()`).
-    Dependencies that leave the subDAG — the union fan-in — are wired afterwards by
-    `wire_upstreams_from()`, once every subDAG of the mega-DAG exists.
+    Dependencies that leave the subDAG — the union fan-in and the verdict task's edges — are
+    wired afterwards by `wire_upstreams_from()`, once every subDAG of the mega-DAG exists.
 
     Rendering must happen inside a DAG context (the `@dag` body of `geo_pipeline.py`):
     operators attach to the current DAG on creation, which is also what makes the
@@ -132,12 +140,12 @@ class JobsSubDAG:
         return tasks
 
     def wire_upstreams_from(self, tasks: Mapping[str, BashOperator]) -> None:
-        """Wire this subDAG's tasks to parents rendered by other subDAGs (the union fan-in).
+        """Wire this subDAG's tasks to parents rendered by other subDAGs (fan-in and verdict).
 
         Every upstream id of a task spec belongs either to this subDAG or to another one; the
         foreign ones are connected here, keeping the trigger rule of their spec — the union
         root's `all_done_min_one_success` makes it run only when at least one of the source
-        `single_etl` tasks succeeded.
+        `single_etl` tasks succeeded, the verdict task's `all_done` waits for everything.
 
         Raises:
             ValueError: When a foreign upstream id is not rendered by any subDAG.
@@ -173,9 +181,10 @@ class GEO_DAG:
     `source_name` — the source chains in jobs.json order (nine today), then the union chain —
     and every subDAG renders its own tasks into the single Airflow DAG.
 
-    Between the subDAGs there is exactly one dependency: the union subDAG is downstreamed on
+    Between the subDAGs there are two dependencies: the union subDAG is downstreamed on
     all the others, its root (`Union.single_etl`) waiting for the `single_etl` task of every
-    source subDAG (see `JobsSubDAG.wire_upstreams_from()`).
+    source subDAG, and the verdict task (`Union.verdict`) waiting for every task of the DAG
+    (see `JobsSubDAG.wire_upstreams_from()`).
     """
 
     def __init__(
