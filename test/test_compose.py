@@ -79,8 +79,18 @@ def test_setup_scripts_write_the_supabase_variables() -> None:
             assert var in text, f"{script}: {var}"
 
 
-def test_setup_scripts_mirror_the_credentials_into_geo_etl() -> None:
-    """The Supabase setup lives here: both setup scripts must also write GEO_ETL/.env,
-    so the sibling ETL project reads the same SUPABASE_DB_* values without its own setup."""
-    assert "sync_geo_etl_env" in (_ROOT / "setup.sh").read_text()
-    assert "Sync-GeoEtlEnv" in (_ROOT / "setup.ps1").read_text()
+def test_setup_scripts_mirror_the_credentials_into_the_sibling_projects() -> None:
+    """The Supabase setup lives here: both setup scripts must also write GEO_ETL/.env and
+    GEO_API/.env, so the sibling projects read the same SUPABASE_DB_* values without their own
+    setup — including on a plain re-run that leaves an existing .env.local untouched."""
+    # a call immediately followed by `exit 0` = the "env file already exists" early-exit path
+    early_exit_call = {
+        "setup.sh": "    sync_sibling_envs\n    exit 0\n",
+        "setup.ps1": "    Sync-SiblingEnv (Get-SupabaseValueMap)\n    exit 0\n",
+    }
+    for script, func in (("setup.sh", "sync_sibling_envs"), ("setup.ps1", "Sync-SiblingEnv")):
+        text = (_ROOT / script).read_text()
+        assert func in text, f"{script}: {func}"
+        for sibling in ("GEO_ETL", "GEO_API"):
+            assert sibling in text, f"{script}: {sibling}"
+        assert early_exit_call[script] in text, f"{script}: early-exit must still mirror"

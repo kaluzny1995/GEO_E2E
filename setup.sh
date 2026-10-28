@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
 # detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
-# Supabase credentials into the sibling GEO_ETL/.env (GEO_E2E is where their setup lives).
+# Supabase credentials into the sibling GEO_ETL/.env and GEO_API/.env (setup lives here).
 # Git-ignored; docker compose reads it through `--env-file .env.local` (see README — Setup).
 # In a Docker container it writes .env.docker instead, non-interactively (defaults only).
 #
@@ -41,9 +41,61 @@ done
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GEO_ROOT="$(dirname "$PROJECT_DIR")"
 
+SUPABASE_KEYS=(SUPABASE_DB_USER SUPABASE_DB_PASSWORD SUPABASE_DB_HOST SUPABASE_DB_PORT SUPABASE_DB_NAME)
+
+# GEO_ETL and GEO_API read the same five Supabase values from their own gitignored .env files —
+# GEO_E2E is where they are set up, so mirror them into both sibling files (upsert: other lines
+# are preserved, a missing file is created with a pointer comment).
+sync_sibling_envs() {
+    local any=0 sibling target tmp key value keys_re
+    for key in "${SUPABASE_KEYS[@]}"; do
+        if [[ -n "${!key:-}" ]]; then
+            any=1
+        fi
+    done
+    if [[ "$any" -ne 1 ]]; then
+        return 0 # nothing to mirror — the warning above already told the user
+    fi
+    # joined with `|` for grep (the ${arr[*]//pat/rep} form would run per element, not on the join)
+    keys_re="^($(IFS='|'; echo "${SUPABASE_KEYS[*]}"))="
+    for sibling in GEO_ETL GEO_API; do
+        target="$GEO_ROOT/$sibling/.env"
+        if [[ ! -d "$GEO_ROOT/$sibling" ]]; then
+            echo "warning: $GEO_ROOT/$sibling not found — skipped writing its .env" >&2
+            continue
+        fi
+        tmp="$(mktemp "${target}.tmp.XXXXXX")"
+        if [[ -f "$target" ]]; then
+            # keep every existing line except the five keys, then re-append the current values
+            grep -E -v "$keys_re" "$target" > "$tmp" || true
+        else
+            {
+                echo "# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env.local by GEO_E2E's ./setup.sh"
+                echo "# Set them in GEO_E2E/.env.local first (see GEO_E2E/.env.example); this file is gitignored."
+            } > "$tmp"
+        fi
+        for key in "${SUPABASE_KEYS[@]}"; do
+            value="${!key:-}"
+            if [[ -n "$value" ]]; then
+                printf '%s=%s\n' "$key" "$value" >> "$tmp"
+            fi
+        done
+        mv "$tmp" "$target"
+        echo "Mirrored the Supabase credentials into $target:"
+        grep -E "^(SUPABASE_DB_USER|SUPABASE_DB_HOST|SUPABASE_DB_PORT)=" "$target" | sed 's/^/  /'
+    done
+}
+
 if [[ -e "$PROJECT_DIR/$ENV_FILE" && "$FORCE" != true ]]; then
     echo "$ENV_FILE already exists in $PROJECT_DIR — nothing to do."
     echo "Edit it manually, or rerun ./setup.sh --force to regenerate it from this checkout."
+    # The env file itself is untouched, but the sibling .env files are still refreshed from it
+    for key in "${SUPABASE_KEYS[@]}"; do
+        # `|| true`: a missing key must not fail the script (set -e + pipefail)
+        value="$(grep -E "^${key}=" "$PROJECT_DIR/$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
+        printf -v "$key" '%s' "$value"
+    done
+    sync_sibling_envs
     exit 0
 fi
 
@@ -68,59 +120,19 @@ prompt() {
 
 # Supabase credentials are secrets: they are never prompted (they would land in the terminal
 # scrollback) — the primary place to set them is this file (.env.local); a previous value of
-# .env.local or of the sibling GEO_ETL/.env is re-used, else they stay empty (docker compose
-# then fails with a message naming the missing variable). sync_geo_etl_env() below mirrors the
-# result back into GEO_ETL/.env, so both projects always run with the same credentials.
+# .env.local or of a sibling GEO_ETL/.env / GEO_API/.env is re-used, else they stay empty
+# (docker compose then fails with a message naming the missing variable). sync_sibling_envs()
+# mirrors the result back into both siblings, so every project runs with the same credentials.
 supabase_value() {
-    local key="$1" value=""
+    local key="$1" value="" sibling
     value="$(previous_value "$key")"
-    if [[ -z "$value" && -f "$GEO_ROOT/GEO_ETL/.env" ]]; then
-        # `|| true`: a missing key must not fail the script (set -e + pipefail)
-        value="$(grep -E "^${key}=" "$GEO_ROOT/GEO_ETL/.env" | head -n1 | cut -d= -f2- || true)"
-    fi
+    for sibling in GEO_ETL GEO_API; do
+        if [[ -z "$value" && -f "$GEO_ROOT/$sibling/.env" ]]; then
+            # `|| true`: a missing key must not fail the script (set -e + pipefail)
+            value="$(grep -E "^${key}=" "$GEO_ROOT/$sibling/.env" | head -n1 | cut -d= -f2- || true)"
+        fi
+    done
     echo "$value"
-}
-
-SUPABASE_KEYS=(SUPABASE_DB_USER SUPABASE_DB_PASSWORD SUPABASE_DB_HOST SUPABASE_DB_PORT SUPABASE_DB_NAME)
-
-# GEO_ETL reads the same five Supabase values from its own gitignored .env — GEO_E2E is where
-# they are set up, so mirror them into the sibling file (upsert: other lines are preserved,
-# a missing file is created with a pointer comment).
-sync_geo_etl_env() {
-    local target="$GEO_ROOT/GEO_ETL/.env" tmp key value any=0 keys_re
-    if [[ ! -d "$GEO_ROOT/GEO_ETL" ]]; then
-        echo "warning: $GEO_ROOT/GEO_ETL not found — skipped writing its .env" >&2
-        return 0
-    fi
-    for key in "${SUPABASE_KEYS[@]}"; do
-        if [[ -n "${!key:-}" ]]; then
-            any=1
-        fi
-    done
-    if [[ "$any" -ne 1 ]]; then
-        return 0 # nothing to mirror — the warning above already told the user
-    fi
-    # joined with `|` for grep (the ${arr[*]//pat/rep} form would run per element, not on the join)
-    keys_re="^($(IFS='|'; echo "${SUPABASE_KEYS[*]}"))="
-    tmp="$(mktemp "${target}.tmp.XXXXXX")"
-    if [[ -f "$target" ]]; then
-        # keep every existing line except the five keys, then re-append the current values
-        grep -E -v "$keys_re" "$target" > "$tmp" || true
-    else
-        {
-            echo "# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env.local by GEO_E2E's ./setup.sh"
-            echo "# Set them in GEO_E2E/.env.local first (see GEO_E2E/.env.example); this file is gitignored."
-        } > "$tmp"
-    fi
-    for key in "${SUPABASE_KEYS[@]}"; do
-        value="${!key:-}"
-        if [[ -n "$value" ]]; then
-            printf '%s=%s\n' "$key" "$value" >> "$tmp"
-        fi
-    done
-    mv "$tmp" "$target"
-    echo "Mirrored the Supabase credentials into $target:"
-    grep -E "^(SUPABASE_DB_USER|SUPABASE_DB_HOST|SUPABASE_DB_PORT)=" "$target" | sed 's/^/  /'
 }
 
 warn_missing_sibling() {
@@ -186,7 +198,7 @@ SUPABASE_DB_NAME="$(supabase_value SUPABASE_DB_NAME)"
 AIRFLOW_DB_SCHEMA="${AIRFLOW_DB_SCHEMA:-$(previous_value AIRFLOW_DB_SCHEMA)}"
 AIRFLOW_DB_SCHEMA="${AIRFLOW_DB_SCHEMA:-geo_airflow}"
 if [[ -z "$SUPABASE_DB_USER" || -z "$SUPABASE_DB_PASSWORD" || -z "$SUPABASE_DB_HOST" ]]; then
-    echo "warning: SUPABASE_DB_* not found in $ENV_FILE or $GEO_ROOT/GEO_ETL/.env — fill them in $ENV_FILE" \
+    echo "warning: SUPABASE_DB_* not found in $ENV_FILE, $GEO_ROOT/GEO_ETL/.env or $GEO_ROOT/GEO_API/.env — fill them in $ENV_FILE" \
         "(template: .env.example) before docker compose" >&2
 fi
 
@@ -221,6 +233,6 @@ EOF
 echo "Wrote $PROJECT_DIR/$ENV_FILE:"
 grep -E "^(GEO_ROOT|CONDA_ROOT|AIRFLOW_UID|_AIRFLOW_WWW_USER_USERNAME|SUPABASE_DB_USER|SUPABASE_DB_HOST|SUPABASE_DB_PORT|AIRFLOW_DB_SCHEMA)=" "$PROJECT_DIR/$ENV_FILE" | sed 's/^/  /'
 echo
-sync_geo_etl_env
+sync_sibling_envs
 echo
 echo "$NEXT_LINE"

@@ -47,7 +47,7 @@ GEO_E2E/
 | `config.json` | Command templates for `DOWNLOAD`/`INGESTION`/`DATA_QUALITY`/`SINGLE_ETL`/`VIEW` (folder, script, conda env) |
 | `jobs.json` | Flat job list — one object per job (`name`, `job_type`, `next_jobs` as name references) — plus the `Union` job |
 | `docker-compose.yaml` | Airflow services (`network_mode: host`, UI on `8090`, metadata DB = Supabase Postgres from `.env.local`) plus the Spark cluster |
-| `setup.sh` | Writes the git-ignored `.env.local` once per checkout — `GEO_ROOT`/`GEO_DATA_DIR` from the clone's location, `CONDA_ROOT` from `conda info --base`, `AIRFLOW_UID` from `id -u`, the Airflow UI login (`--force` keeps the existing one) and the `SUPABASE_DB_*` credentials (re-used from an existing file or from `../GEO_ETL/.env`); compose reads it via `--env-file .env.local` |
+| `setup.sh` | Writes the git-ignored `.env.local` once per checkout — `GEO_ROOT`/`GEO_DATA_DIR` from the clone's location, `CONDA_ROOT` from `conda info --base`, `AIRFLOW_UID` from `id -u`, the Airflow UI login (`--force` keeps the existing one) and the `SUPABASE_DB_*` credentials (re-used from an existing file or from a sibling `GEO_ETL/.env` / `GEO_API/.env`, then mirrored into both `../GEO_ETL/.env` and `../GEO_API/.env`); compose reads it via `--env-file .env.local` |
 | `docker/airflow/Dockerfile` | Extends `apache/airflow:3.3.2-python3.11` with `apache-airflow-providers-standard`, `psutil`, `pydantic` (pinned to the Airflow constraints) and a `conda` symlink to the host conda (bind-mounted at runtime) |
 | `docker/airflow/create_schema.py` | Creates the `geo_airflow` schema on Supabase — `airflow-init` runs it before `airflow db migrate`, so the migration's tables land in the schema the connection's `search_path` points at |
 
