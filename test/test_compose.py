@@ -77,3 +77,10 @@ def test_setup_scripts_write_the_supabase_variables() -> None:
         text = (_ROOT / script).read_text()
         for var in SUPABASE_VARS:
             assert var in text, f"{script}: {var}"
+
+
+def test_setup_scripts_mirror_the_credentials_into_geo_etl() -> None:
+    """The Supabase setup lives here: both setup scripts must also write GEO_ETL/.env,
+    so the sibling ETL project reads the same SUPABASE_DB_* values without its own setup."""
+    assert "sync_geo_etl_env" in (_ROOT / "setup.sh").read_text()
+    assert "Sync-GeoEtlEnv" in (_ROOT / "setup.ps1").read_text()

@@ -310,7 +310,7 @@ You can inspect the pools under **Admin → Pools** or via `docker compose --env
 
 ## Supabase metadata DB (`.env.local`)
 
-Airflow's metadata DB is the **Supabase** Postgres of the GEO_ETL project — there is no local Postgres container (the old one's data volume `geo_e2e_postgres_data` survives as a backup until you prune it). `docker-compose.yaml` assembles the connection from environment variables that live in the git-ignored `.env.local` (template: `.env.example`; `./setup.sh` writes the file and copies the values from an existing `.env.local`, else from `../GEO_ETL/.env` — same project, same variable names):
+Airflow's metadata DB is the **Supabase** Postgres of the GEO_ETL project — there is no local Postgres container (the old one's data volume `geo_e2e_postgres_data` survives as a backup until you prune it). `docker-compose.yaml` assembles the connection from environment variables that live in the git-ignored `.env.local` (template: `.env.example`). **This project is where the Supabase setup lives for the whole pipeline**: `./setup.sh` re-uses whatever `.env.local` or `../GEO_ETL/.env` already contains and then mirrors the five `SUPABASE_DB_*` values into **both** files — the ETL reads them from its own gitignored `.env`, so GEO_ETL needs no separate setup:
 
 | Variable | Shipped value | Description |
 |----------|---------------|-------------|
@@ -358,6 +358,8 @@ For a fresh clone from GitHub (no sibling `GEO_ETL` checkout to copy from). **On
 
 5. **Supabase password** — `SUPABASE_DB_PASSWORD` is **never displayed** in the dashboard: use the value you saved when the project was created, or go to **Project Settings → Database → Generate password** (formerly *Reset database password*). That rotation invalidates the previous password immediately, so update every other client at once (GEO_ETL's `.env` shares the project). See [GEO_ETL — Supabase Credentials](../../GEO_ETL/docs/configuration.md#supabase-credentials) for the same walkthrough, the API/PAT rotation and a least-privilege role.
 6. **Schema** — leave `AIRFLOW_DB_SCHEMA=geo_airflow`. On the first `docker compose --env-file .env.local up`, `airflow-init` creates it and runs the migration into it; afterwards the DAG grid starts empty (the metadata of an earlier, local-Postgres setup is not migrated — the old data volume `geo_e2e_postgres_data` is kept as a backup until you prune it).
+
+   > `./setup.sh` (and `setup.ps1`) also **write the five `SUPABASE_DB_*` values into `../GEO_ETL/.env`** — the sibling ETL project reads its JDBC credentials from that gitignored file, so you configure the credentials once, here, and never copy them between projects.
 7. **Check** — `docker compose --env-file .env.local config --quiet` renders the file and fails with the name of any missing key; `docker compose --env-file .env.local run --rm --no-deps airflow-cli python -c "import os; from sqlalchemy import create_engine, text; e=create_engine(os.environ['AIRFLOW__DATABASE__SQL_ALCHEMY_CONN']); print(e.connect().execute(text('select current_schema()')).scalar())"` prints `geo_airflow` when the connection and the schema are right.
 
 A missing variable stops compose early with a message naming the key (`Set SUPABASE_DB_HOST in .env.local (run ./setup.sh)`). The credentials are secrets: `.env.local` and `.env.docker` are git-ignored and only `.env.example` (placeholders) is committed — the same rule as GEO_ETL's `.env`.

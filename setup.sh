@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
-# detected from this checkout, so the stack runs wherever the repo was cloned. Git-ignored;
-# docker compose reads it through `--env-file .env.local` (see README — Setup). In a Docker
-# container it writes .env.docker instead, non-interactively (defaults only).
+# detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
+# Supabase credentials into the sibling GEO_ETL/.env (GEO_E2E is where their setup lives).
+# Git-ignored; docker compose reads it through `--env-file .env.local` (see README — Setup).
+# In a Docker container it writes .env.docker instead, non-interactively (defaults only).
 #
 # Usage: ./setup.sh [--force] [--help]
 #   --force  regenerate an existing env file (keeps the Airflow login already stored there)
@@ -66,9 +67,10 @@ prompt() {
 }
 
 # Supabase credentials are secrets: they are never prompted (they would land in the terminal
-# scrollback) — they come from an existing env file across --force, else from the GEO_ETL
-# project's .env (same Supabase project, same variable names), else stay empty (docker compose
-# then fails with a message naming the missing variable).
+# scrollback) — the primary place to set them is this file (.env.local); a previous value of
+# .env.local or of the sibling GEO_ETL/.env is re-used, else they stay empty (docker compose
+# then fails with a message naming the missing variable). sync_geo_etl_env() below mirrors the
+# result back into GEO_ETL/.env, so both projects always run with the same credentials.
 supabase_value() {
     local key="$1" value=""
     value="$(previous_value "$key")"
@@ -77,6 +79,48 @@ supabase_value() {
         value="$(grep -E "^${key}=" "$GEO_ROOT/GEO_ETL/.env" | head -n1 | cut -d= -f2- || true)"
     fi
     echo "$value"
+}
+
+SUPABASE_KEYS=(SUPABASE_DB_USER SUPABASE_DB_PASSWORD SUPABASE_DB_HOST SUPABASE_DB_PORT SUPABASE_DB_NAME)
+
+# GEO_ETL reads the same five Supabase values from its own gitignored .env — GEO_E2E is where
+# they are set up, so mirror them into the sibling file (upsert: other lines are preserved,
+# a missing file is created with a pointer comment).
+sync_geo_etl_env() {
+    local target="$GEO_ROOT/GEO_ETL/.env" tmp key value any=0 keys_re
+    if [[ ! -d "$GEO_ROOT/GEO_ETL" ]]; then
+        echo "warning: $GEO_ROOT/GEO_ETL not found — skipped writing its .env" >&2
+        return 0
+    fi
+    for key in "${SUPABASE_KEYS[@]}"; do
+        if [[ -n "${!key:-}" ]]; then
+            any=1
+        fi
+    done
+    if [[ "$any" -ne 1 ]]; then
+        return 0 # nothing to mirror — the warning above already told the user
+    fi
+    # joined with `|` for grep (the ${arr[*]//pat/rep} form would run per element, not on the join)
+    keys_re="^($(IFS='|'; echo "${SUPABASE_KEYS[*]}"))="
+    tmp="$(mktemp "${target}.tmp.XXXXXX")"
+    if [[ -f "$target" ]]; then
+        # keep every existing line except the five keys, then re-append the current values
+        grep -E -v "$keys_re" "$target" > "$tmp" || true
+    else
+        {
+            echo "# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env.local by GEO_E2E's ./setup.sh"
+            echo "# Set them in GEO_E2E/.env.local first (see GEO_E2E/.env.example); this file is gitignored."
+        } > "$tmp"
+    fi
+    for key in "${SUPABASE_KEYS[@]}"; do
+        value="${!key:-}"
+        if [[ -n "$value" ]]; then
+            printf '%s=%s\n' "$key" "$value" >> "$tmp"
+        fi
+    done
+    mv "$tmp" "$target"
+    echo "Mirrored the Supabase credentials into $target:"
+    grep -E "^(SUPABASE_DB_USER|SUPABASE_DB_HOST|SUPABASE_DB_PORT)=" "$target" | sed 's/^/  /'
 }
 
 warn_missing_sibling() {
@@ -176,5 +220,7 @@ EOF
 
 echo "Wrote $PROJECT_DIR/$ENV_FILE:"
 grep -E "^(GEO_ROOT|CONDA_ROOT|AIRFLOW_UID|_AIRFLOW_WWW_USER_USERNAME|SUPABASE_DB_USER|SUPABASE_DB_HOST|SUPABASE_DB_PORT|AIRFLOW_DB_SCHEMA)=" "$PROJECT_DIR/$ENV_FILE" | sed 's/^/  /'
+echo
+sync_geo_etl_env
 echo
 echo "$NEXT_LINE"

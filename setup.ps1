@@ -1,8 +1,9 @@
 ﻿<#
-Writes the machine-specific env file (paths, uid, Airflow UI login) detected from this checkout,
-so the stack runs wherever the repo was cloned. Git-ignored; docker compose reads it through
-`--env-file .env.local` (see README — Setup). In a Docker container it writes .env.docker
-instead, non-interactively (defaults only).
+Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
+detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
+Supabase credentials into the sibling GEO_ETL/.env (GEO_E2E is where their setup lives).
+Git-ignored; docker compose reads it through `--env-file .env.local` (see README — Setup).
+In a Docker container it writes .env.docker instead, non-interactively (defaults only).
 
 Usage: .\setup.ps1 [-Force] [-Help]
   -Force  regenerate an existing env file (keeps the Airflow login already stored there)
@@ -182,9 +183,10 @@ if (-not $defaultPassword) { $defaultPassword = 'airflow_admin' }
 $password = Read-PromptValue $defaultPassword 'Airflow UI password (_AIRFLOW_WWW_USER_PASSWORD)'
 
 # Supabase credentials are secrets: never prompted (they would land in the scrollback) —
-# they come from an existing env file across -Force, else from the GEO_ETL project's .env
-# (same Supabase project, same variable names), else stay empty (compose then fails with a
-# message naming the missing variable).
+# the primary place to set them is this file (.env.local); a previous value of .env.local or
+# of the sibling GEO_ETL/.env is re-used, else they stay empty (compose then fails with a
+# message naming the missing variable). Sync-GeoEtlEnv below mirrors the result back into
+# GEO_ETL/.env, so both projects always run with the same credentials.
 $geoEtlEnv = Join-Path (Join-Path $geoRoot 'GEO_ETL') '.env'
 function Get-SupabaseValue {
     param([string] $Key)
@@ -205,6 +207,57 @@ $schema = Get-PreviousValue 'AIRFLOW_DB_SCHEMA'
 if (-not $schema) { $schema = 'geo_airflow' }
 if (-not $supabaseUser -or -not $supabasePassword -or -not $supabaseHost) {
     Write-Warning "SUPABASE_DB_* not found in $envFile or $geoEtlEnv — fill them in $envFile (template: .env.example) before docker compose"
+}
+
+# GEO_ETL reads the same five Supabase values from its own gitignored .env — GEO_E2E is where
+# they are set up, so mirror them into the sibling file (upsert: other lines are preserved,
+# a missing file is created with a pointer comment).
+$supabaseKeys = @(
+    'SUPABASE_DB_USER',
+    'SUPABASE_DB_PASSWORD',
+    'SUPABASE_DB_HOST',
+    'SUPABASE_DB_PORT',
+    'SUPABASE_DB_NAME'
+)
+function Sync-GeoEtlEnv {
+    $geoEtlDir = Join-Path $geoRoot 'GEO_ETL'
+    if (-not (Test-Path -LiteralPath $geoEtlDir)) {
+        Write-Warning "$geoEtlDir not found — skipped writing its .env"
+        return
+    }
+    $values = @{
+        'SUPABASE_DB_USER'     = $supabaseUser
+        'SUPABASE_DB_PASSWORD' = $supabasePassword
+        'SUPABASE_DB_HOST'     = $supabaseHost
+        'SUPABASE_DB_PORT'     = $supabasePort
+        'SUPABASE_DB_NAME'     = $supabaseName
+    }
+    $any = $false
+    foreach ($k in $supabaseKeys) { if ($values[$k]) { $any = $true; break } }
+    if (-not $any) { return } # nothing to mirror — the warning above already told the user
+
+    $target = Join-Path $geoEtlDir '.env'
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    if (Test-Path -LiteralPath $target) {
+        foreach ($line in Get-Content -LiteralPath $target) {
+            $isSupabaseKey = $false
+            foreach ($k in $supabaseKeys) {
+                if ($line.StartsWith("$k=")) { $isSupabaseKey = $true; break }
+            }
+            if (-not $isSupabaseKey) { $lines.Add($line) }
+        }
+    }
+    else {
+        $lines.Add("# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env.local by GEO_E2E's setup.ps1")
+        $lines.Add('# Set them in GEO_E2E/.env.local first (see GEO_E2E/.env.example); this file is gitignored.')
+    }
+    foreach ($k in $supabaseKeys) { if ($values[$k]) { $lines.Add("$k=$($values[$k])") } }
+    $utf8NoBomEnv = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllLines($target, $lines.ToArray(), $utf8NoBomEnv)
+    Write-Output "Mirrored the Supabase credentials into ${target}:"
+    foreach ($k in @('SUPABASE_DB_USER', 'SUPABASE_DB_HOST', 'SUPABASE_DB_PORT')) {
+        Write-Output "  $k=$($values[$k])"
+    }
 }
 
 $stamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -242,5 +295,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 Write-Output "Wrote ${envPath}:"
 $keyLine = '^(GEO_ROOT|CONDA_ROOT|AIRFLOW_UID|_AIRFLOW_WWW_USER_USERNAME|SUPABASE_DB_USER|SUPABASE_DB_HOST|SUPABASE_DB_PORT|AIRFLOW_DB_SCHEMA)='
 Get-Content -LiteralPath $envPath | Where-Object { $_ -match $keyLine } | ForEach-Object { Write-Output "  $_" }
+Write-Output ''
+Sync-GeoEtlEnv
 Write-Output ''
 Write-Output $nextLine
