@@ -6,10 +6,11 @@ import os
 import re
 from datetime import date
 from enum import StrEnum
+from functools import lru_cache
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Config lives next to this module — the paths are resolved once at import time
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,10 +62,21 @@ class JobConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+@lru_cache(maxsize=1)
+def _read_job_config(config_path: str) -> JobConfig:
+    """Read and parse the `job` block of the given config.json — cached per path.
+
+    The cache key is the path itself, so tests patching `_CONFIG_PATH` with their own tmp
+    files keep working (each patched path misses the cache). `JobConfig` is frozen, so the
+    shared instance cannot be mutated by a caller.
+    """
+    with open(config_path) as f:
+        return JobConfig(**json.load(f)["job"])
+
+
 def get_job_config() -> JobConfig:
     """Load the `job` block of config.json (the command template of every job type)."""
-    with open(_CONFIG_PATH) as f:
-        return JobConfig(**json.load(f)["job"])
+    return _read_job_config(_CONFIG_PATH)
 
 
 class PoolConfig(BaseModel):
@@ -89,7 +101,7 @@ class DagSettings(BaseModel):
     timezone: str
     catchup: bool = False
     max_active_runs: int = 1
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     retries: int = 0
     execution_timeout_minutes: int = 30
     union_source: str = "Union"
@@ -120,10 +132,17 @@ class DagSettings(BaseModel):
         }[job_type]
 
 
+@lru_cache(maxsize=1)
+def _read_dag_settings(config_path: str) -> DagSettings:
+    """Read and parse the `dag` block of the given config.json — cached per path
+    (same keying rules as `_read_job_config`; `DagSettings` is frozen)."""
+    with open(config_path) as f:
+        return DagSettings(**json.load(f)["dag"])
+
+
 def get_dag_settings() -> DagSettings:
     """Load the `dag` block of config.json (retries, timeout, pools, ...)."""
-    with open(_CONFIG_PATH) as f:
-        return DagSettings(**json.load(f)["dag"])
+    return _read_dag_settings(_CONFIG_PATH)
 
 
 class Job(BaseModel):
@@ -143,7 +162,7 @@ class Job(BaseModel):
     table_name: str | None = None
     schedule: str | None = None
     is_next_skipped_if_error: bool = True
-    next_jobs: list[str] = []
+    next_jobs: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(frozen=True)
 
@@ -158,8 +177,12 @@ class Job(BaseModel):
             )
         return value
 
-    def get_command(self) -> str:
+    def get_command(self, job_config: JobConfig | None = None) -> str:
         """Build the shell command of this job from the `job` block of config.json.
+
+        `job_config` lets a caller (see `build_task_specs`) pass the config it already
+        loaded instead of re-reading it per job; without it the config is fetched here
+        (cached per path — see `_read_job_config`).
 
         Raises:
             ValueError: When a non-DOWNLOAD job (INGESTION, DATA_QUALITY, SINGLE_ETL or
@@ -171,7 +194,8 @@ class Job(BaseModel):
                 "a VERDICT job has no shell command — build_task_specs() synthesizes the verdict task itself"
             )
 
-        job_config = get_job_config()
+        if job_config is None:
+            job_config = get_job_config()
 
         # DOWNLOAD takes the source name as its only argument; the other types take (job_type, table_name)
         if self.job_type == EJobType.DOWNLOAD:
@@ -182,17 +206,10 @@ class Job(BaseModel):
                 f'{self.job_type.value} job for "{self.source_name}" has no table_name configured in jobs.json'
             )
 
-        if self.job_type == EJobType.INGESTION:
-            return job_config.ingestion.get_command_string(self.job_type.value, self.table_name)
-
-        if self.job_type == EJobType.SINGLE_ETL:
-            return job_config.single_etl.get_command_string(self.job_type.value, self.table_name)
-
-        if self.job_type == EJobType.VIEW:
-            return job_config.view.get_command_string(self.job_type.value, self.table_name)
-
-        # DATA_QUALITY is the only remaining job type — fall through to it
-        return job_config.data_quality.get_command_string(self.job_type.value, self.table_name)
+        # INGESTION / DATA_QUALITY / SINGLE_ETL / VIEW — every one's JobTypeConfig field of
+        # JobConfig is the lowercased job type (the VERDICT and DOWNLOAD cases are handled above)
+        type_config: JobTypeConfig = getattr(job_config, self.job_type.value.lower())
+        return type_config.get_command_string(self.job_type.value, self.table_name)
 
 
 class TaskSpec(BaseModel):
@@ -211,10 +228,22 @@ class TaskSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+@lru_cache(maxsize=1)
+def _read_jobs(jobs_path: str) -> tuple[Job, ...]:
+    """Read and parse the given jobs.json (file order) — cached per path.
+
+    Same keying rules as `_read_job_config`: tests patching `_JOBS_PATH` with their own
+    tmp files miss the cache, and no test rewrites one path between reads. The cache holds
+    an immutable tuple of frozen `Job`s; `load_jobs()` hands out a fresh list per call, so
+    a caller can never corrupt the cached entry.
+    """
+    with open(jobs_path) as f:
+        return tuple(Job(**raw) for raw in json.load(f))
+
+
 def load_jobs() -> list[Job]:
     """Load the flat job list of jobs.json, preserving file order."""
-    with open(_JOBS_PATH) as f:
-        return [Job(**raw) for raw in json.load(f)]
+    return list(_read_jobs(_JOBS_PATH))
 
 
 def _index_jobs(jobs: list[Job]) -> tuple[dict[str, Job], list[Job]]:

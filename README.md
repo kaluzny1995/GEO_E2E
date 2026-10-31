@@ -193,16 +193,16 @@ Verify in the UI at http://localhost:8090 → **DAGs** (the toggle is on) or via
 
 ### 5. Verify directory structure
 
-All three projects must be siblings under the same parent directory (`GeographicData/`). Both GEO_E2E and GEO_ETL expect GEO_Download to be located at `../GEO_Download/`:
+All five projects live as siblings under the same parent directory (`GeographicData/`). GEO_E2E, GEO_ETL and GEO_API expect their siblings at `../<name>/`, and `./setup.sh` mirrors the Supabase credentials into `../GEO_ETL/.env` and `../GEO_API/.env`:
 
 ```
 GeographicData/
-├── GEO_Download/           # Data downloader
+├── GEO_Download/           # Data downloader (scheduled by the DOWNLOAD tasks)
 │   ├── run_download.py
 │   ├── config.json
 │   ├── downloader/
 │   ├── model/
-│   ├── data/               # Downloaded CSV files
+│   ├── data/               # Downloaded CSV files (read-only into the Spark nodes)
 │   └── ...
 ├── GEO_E2E/                # This project (orchestrator + Docker Compose)
 │   ├── docker-compose.yaml
@@ -218,17 +218,32 @@ GeographicData/
 │   ├── util.py             # Memory logging helpers
 │   ├── docker/
 │   │   └── airflow/
-│   │       └── Dockerfile # Airflow image (providers + psutil + pydantic)
+│   │       ├── Dockerfile       # Airflow image (providers + psutil + pydantic)
+│   │       ├── create_schema.py # geo_airflow schema (run before the migration)
+│   │       └── seed_pools.py    # dag.pool_slots pools (idempotent)
 │   ├── environment.yml
 │   ├── docs/
 │   └── ...
-└── GEO_ETL/                # PySpark ETL cluster
-    ├── environment.yml
-    ├── run_pyspark_csv_test.py
-    └── spark_cluster_image/
-        ├── Dockerfile
-        └── jars/
+├── GEO_ETL/                # PySpark ETL cluster (INGESTION / DATA_QUALITY / SINGLE_ETL / VIEW)
+│   ├── environment.yml
+│   ├── run_etl.py
+│   ├── run_pyspark_csv_test.py
+│   └── spark_cluster_image/
+│       ├── Dockerfile
+│       └── jars/
+├── GEO_API/                # FastAPI data-sharing layer (read-only REST API over Supabase)
+│   ├── main.py / run.py
+│   ├── config.json / metadata.json
+│   ├── provider/ / routes/ / model/
+│   ├── environment.yml
+│   └── .env                # Written by ./setup.sh (same five SUPABASE_DB_* values)
+└── GEO_APP/                # React dashboard — reads from GEO_API (no sibling coupling)
+    ├── package.json
+    ├── src/
+    └── ...
 ```
+
+`GEO_APP` is the only project without a hard sibling requirement — it is a Vite/React frontend that talks to a running `GEO_API` over HTTP (`src/config.js` → `http://localhost:8000`), so it can be cloned or built anywhere. Every other project resolves its siblings through the relative `../<name>/` paths shown above.
 
 ## Usage
 
@@ -249,3 +264,5 @@ Configuration lives in `config.json` (command templates plus the `dag` block: re
 
 - **GEO_Download** — the actual data downloader that GEO_E2E schedules. Handles HTTP requests, CSV parsing, and file storage with historical/incremental modes.
 - **GEO_ETL** — PySpark ETL cluster for transforming the downloaded CSV data. Connects to the Spark cluster via `spark://localhost:7078`.
+- **GEO_API** — FastAPI data-sharing layer that serves the finished data (`/data-quality/...`, `/event-counts/...`) from the same Supabase project. Shares its five `SUPABASE_DB_*` credentials — `./setup.sh` writes `../GEO_API/.env` alongside `../GEO_ETL/.env`.
+- **GEO_APP** — React dashboard that visualises what GEO_API returns (data quality, data quantity, event categories and locations). Talks to a running GEO_API over HTTP; no direct coupling to this project.

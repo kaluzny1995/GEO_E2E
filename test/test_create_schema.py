@@ -20,33 +20,43 @@ def _load_create_schema():
     return module
 
 
-def test_get_schema_defaults_to_geo_airflow(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without AIRFLOW_DB_SCHEMA the script targets the schema compose puts into search_path."""
-    module = _load_create_schema()
-    monkeypatch.delenv(module.ENV_SCHEMA, raising=False)
-    assert module.get_schema() == "geo_airflow"
+@pytest.fixture(scope="module")
+def create_schema_module():
+    """docker/airflow/create_schema.py imported once for the whole module (the exec is not free)."""
+    return _load_create_schema()
 
 
-def test_get_schema_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AIRFLOW_DB_SCHEMA overrides the default (compose interpolates the same value into the URL)."""
-    module = _load_create_schema()
-    monkeypatch.setenv(module.ENV_SCHEMA, "other_schema")
-    assert module.get_schema() == "other_schema"
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        pytest.param(None, "geo_airflow", id="default"),
+        pytest.param("other_schema", "other_schema", id="environment"),
+    ],
+)
+def test_get_schema_defaults_to_geo_airflow_and_reads_the_environment(
+    create_schema_module, monkeypatch: pytest.MonkeyPatch, env_value: str | None, expected: str
+) -> None:
+    """Without AIRFLOW_DB_SCHEMA the script targets the schema compose puts into search_path;
+    AIRFLOW_DB_SCHEMA overrides that default (compose interpolates the same value into the URL)."""
+    if env_value is None:
+        monkeypatch.delenv(create_schema_module.ENV_SCHEMA, raising=False)
+    else:
+        monkeypatch.setenv(create_schema_module.ENV_SCHEMA, env_value)
+
+    assert create_schema_module.get_schema() == expected
 
 
-def test_get_schema_rejects_non_identifier_values(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_schema_rejects_non_identifier_values(create_schema_module, monkeypatch: pytest.MonkeyPatch) -> None:
     """The value is interpolated into DDL — anything but a plain identifier is refused."""
-    module = _load_create_schema()
-    monkeypatch.setenv(module.ENV_SCHEMA, 'geo_airflow"; DROP TABLE dag --')
+    monkeypatch.setenv(create_schema_module.ENV_SCHEMA, 'geo_airflow"; DROP TABLE dag --')
     with pytest.raises(ValueError, match="AIRFLOW_DB_SCHEMA"):
-        module.get_schema()
+        create_schema_module.get_schema()
 
 
-def test_create_schema_runs_idempotent_ddl() -> None:
+def test_create_schema_runs_idempotent_ddl(create_schema_module) -> None:
     """create_schema() executes `CREATE SCHEMA IF NOT EXISTS "…"` and closes the engine."""
-    module = _load_create_schema()
-    with patch.object(module, "create_engine") as create_engine:
-        module.create_schema("postgresql+psycopg2://example", "geo_airflow")
+    with patch.object(create_schema_module, "create_engine") as create_engine:
+        create_schema_module.create_schema("postgresql+psycopg2://example", "geo_airflow")
 
     connection = create_engine.return_value.begin.return_value.__enter__.return_value
     assert str(connection.execute.call_args[0][0]) == 'CREATE SCHEMA IF NOT EXISTS "geo_airflow"'

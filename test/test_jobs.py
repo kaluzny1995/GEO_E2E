@@ -2,11 +2,13 @@
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from model import EJobType, Job, build_task_specs, load_jobs, resolve_schedule
+from test._helpers import CRON, ETL_CMD_PREFIX, UNION_ROOT_ID, VIEW_COUNT, load_shipped_jobs
 
 
 @pytest.fixture()
@@ -25,7 +27,7 @@ def _chain() -> list[dict]:
             "task_id": "NIFC.download",
             "source_name": "NIFC",
             "job_type": "DOWNLOAD",
-            "schedule": "0 8 * * *",
+            "schedule": CRON,
             "is_next_skipped_if_error": True,
             "next_jobs": ["INGESTION-nifc_fire"],
         },
@@ -68,11 +70,6 @@ def _chain() -> list[dict]:
     ]
 
 
-def _load_shipped() -> list[dict]:
-    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
-        return json.load(f)
-
-
 def test_load_jobs_preserves_order_and_fields(jobs_path: Path) -> None:
     """load_jobs() parses the flat list in file order, keeping names and next_jobs references."""
     # Arrange
@@ -98,99 +95,92 @@ def test_load_jobs_preserves_order_and_fields(jobs_path: Path) -> None:
     assert ingestion.is_next_skipped_if_error is True
     assert ingestion.next_jobs == ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl"]
     assert jobs[0].table_name is None  # DOWNLOAD jobs carry no table_name
-    assert jobs[0].schedule == "0 8 * * *"  # scheduled jobs declare their cron
+    assert jobs[0].schedule == CRON  # scheduled jobs declare their cron
 
 
-def test_load_jobs_duplicate_name_raises(jobs_path: Path) -> None:
-    """Two jobs sharing a name fail the registry validation."""
-    # Arrange
-    jobs = _chain()
-    jobs.append({**jobs[2], "next_jobs": []})
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match='duplicate job name "DATA_QUALITY-nifc_fire"'):
-        build_task_specs()
-
-
-def test_load_jobs_duplicate_task_id_raises(jobs_path: Path) -> None:
-    """Two jobs claiming the same task_id fail — Airflow task ids must be unique."""
-    # Arrange
-    jobs = _chain()
-    jobs.append({**jobs[2], "name": "DATA_QUALITY-clone", "next_jobs": []})
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match=re.escape('duplicate task_id "NIFC.data_quality"')):
-        build_task_specs()
-
-
-def test_load_jobs_invalid_task_id_raises(jobs_path: Path) -> None:
-    """A task_id Airflow cannot use (spaces, leading dots, empty segments) fails at load."""
-    # Arrange
-    jobs = _chain()
-    jobs[0]["task_id"] = "NIFC download!"
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match="invalid task_id"):
-        build_task_specs()
-
-
-def test_load_jobs_unknown_reference_raises(jobs_path: Path) -> None:
-    """A next_jobs entry naming a job that does not exist fails the registry validation."""
-    # Arrange
-    jobs = _chain()
-    jobs[0]["next_jobs"] = ["INGESTION-missing"]
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match='"DOWNLOAD-NIFC" references unknown job "INGESTION-missing"'):
-        build_task_specs()
-
-
-def test_load_jobs_two_parents_raises(jobs_path: Path) -> None:
-    """A job referenced by two parent jobs fails the registry validation."""
-    # Arrange
-    jobs = _chain()
-    jobs[4]["next_jobs"] = ["DATA_QUALITY-nifc_fire"]  # the etl-table DQ also points at the plain-table DQ
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match='"DATA_QUALITY-nifc_fire" is referenced by both'):
-        build_task_specs()
-
-
-def test_load_jobs_dependency_cycle_raises(jobs_path: Path) -> None:
-    """Jobs forming a reference cycle fail the registry validation."""
-    # Arrange
-    jobs = _chain()
-    jobs.append(
+def _add_cycle_pair(jobs: list[dict]) -> None:
+    """Append the two jobs forming a next_jobs cycle — a cycle the validation must reject."""
+    jobs.extend(
         {
-            "name": "DATA_QUALITY-cycle_a",
-            "task_id": "NIFC.cycle_a",
+            "name": f"DATA_QUALITY-cycle_{suffix}",
+            "task_id": f"NIFC.cycle_{suffix}",
             "source_name": "NIFC",
             "job_type": "DATA_QUALITY",
             "table_name": "nifc_fire",
             "is_next_skipped_if_error": True,
-            "next_jobs": ["DATA_QUALITY-cycle_b"],
+            "next_jobs": [f"DATA_QUALITY-cycle_{other}"],
         }
+        for suffix, other in (("a", "b"), ("b", "a"))
     )
-    jobs.append(
-        {
-            "name": "DATA_QUALITY-cycle_b",
-            "task_id": "NIFC.cycle_b",
-            "source_name": "NIFC",
-            "job_type": "DATA_QUALITY",
-            "table_name": "nifc_fire",
-            "is_next_skipped_if_error": True,
-            "next_jobs": ["DATA_QUALITY-cycle_a"],
-        }
-    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        pytest.param(
+            lambda jobs: jobs.append({**jobs[2], "next_jobs": []}),
+            'duplicate job name "DATA_QUALITY-nifc_fire"',
+            id="duplicate-name",
+        ),
+        pytest.param(
+            lambda jobs: jobs.append({**jobs[2], "name": "DATA_QUALITY-clone", "next_jobs": []}),
+            re.escape('duplicate task_id "NIFC.data_quality"'),
+            id="duplicate-task-id",
+        ),
+        pytest.param(
+            lambda jobs: jobs.__setitem__(0, {**jobs[0], "task_id": "NIFC download!"}),
+            "invalid task_id",
+            id="invalid-task-id",
+        ),
+        pytest.param(
+            lambda jobs: jobs.__setitem__(0, {**jobs[0], "next_jobs": ["INGESTION-missing"]}),
+            '"DOWNLOAD-NIFC" references unknown job "INGESTION-missing"',
+            id="unknown-reference",
+        ),
+        pytest.param(
+            # the etl-table DQ also points at the plain-table DQ — two parents for one job
+            lambda jobs: jobs.__setitem__(4, {**jobs[4], "next_jobs": ["DATA_QUALITY-nifc_fire"]}),
+            '"DATA_QUALITY-nifc_fire" is referenced by both',
+            id="two-parents",
+        ),
+        pytest.param(
+            _add_cycle_pair,
+            "dependency cycle among: DATA_QUALITY-cycle_a, DATA_QUALITY-cycle_b",
+            id="cycle",
+        ),
+        pytest.param(
+            lambda jobs: jobs.__setitem__(
+                1,
+                {**jobs[1], "next_jobs": ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl", "DOWNLOAD-NIFC"]},
+            ),
+            'scheduled job "DOWNLOAD-NIFC" is referenced by',
+            id="scheduled-with-parent",
+        ),
+        pytest.param(
+            lambda jobs: (jobs[0].pop("schedule"), jobs.append(_union_job())),
+            'root job "DOWNLOAD-NIFC" is neither scheduled nor the union job',
+            id="root-without-schedule",
+        ),
+        pytest.param(
+            lambda jobs: jobs.append({**_union_job(), "schedule": CRON}),
+            'union job "SINGLE_ETL-union_etl" must not be scheduled',
+            id="union-must-not-be-scheduled",
+        ),
+    ],
+)
+def test_registry_validation_rejects_broken_registries(
+    jobs_path: Path, mutate: Callable[[list[dict]], object], message: str
+) -> None:
+    """Every broken registry fails with a specific error: duplicate names and task ids,
+    unusable task ids, unknown references, jobs with two parents, reference cycles and the
+    schedule/union rules of the root jobs."""
+    # Arrange
+    jobs = _chain()
+    mutate(jobs)
     jobs_path.write_text(json.dumps(jobs))
 
     # Act & Assert
-    with pytest.raises(ValueError, match="dependency cycle among: DATA_QUALITY-cycle_a, DATA_QUALITY-cycle_b"):
+    with pytest.raises(ValueError, match=message):
         build_task_specs()
 
 
@@ -198,50 +188,13 @@ def _union_job() -> dict:
     """The bare Union fan-in job of a valid registry."""
     return {
         "name": "SINGLE_ETL-union_etl",
-        "task_id": "Union.single_etl",
+        "task_id": UNION_ROOT_ID,
         "source_name": "Union",
         "job_type": "SINGLE_ETL",
         "table_name": "union_etl",
         "is_next_skipped_if_error": True,
         "next_jobs": [],
     }
-
-
-def test_scheduled_job_with_parent_raises(jobs_path: Path) -> None:
-    """A scheduled job that is also referenced by a parent fails the registry validation."""
-    # Arrange
-    jobs = _chain()
-    jobs[1]["next_jobs"] = ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl", "DOWNLOAD-NIFC"]
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match='scheduled job "DOWNLOAD-NIFC" is referenced by'):
-        build_task_specs()
-
-
-def test_root_without_schedule_raises(jobs_path: Path) -> None:
-    """A root job that is neither scheduled nor the union job fails the registry validation."""
-    # Arrange
-    jobs = _chain()
-    del jobs[0]["schedule"]
-    jobs.append(_union_job())
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match='root job "DOWNLOAD-NIFC" is neither scheduled nor the union job'):
-        build_task_specs()
-
-
-def test_union_job_must_not_be_scheduled(jobs_path: Path) -> None:
-    """A scheduled union job fails the registry validation — it waits for the fan-in."""
-    # Arrange
-    jobs = _chain()
-    jobs.append({**_union_job(), "schedule": "0 8 * * *"})
-    jobs_path.write_text(json.dumps(jobs))
-
-    # Act & Assert
-    with pytest.raises(ValueError, match='union job "SINGLE_ETL-union_etl" must not be scheduled'):
-        build_task_specs()
 
 
 def test_resolve_schedule_returns_the_shared_cron(jobs_path: Path) -> None:
@@ -253,7 +206,7 @@ def test_resolve_schedule_returns_the_shared_cron(jobs_path: Path) -> None:
     schedule = resolve_schedule()
 
     # Assert
-    assert schedule == "0 8 * * *"
+    assert schedule == CRON
 
 
 def test_resolve_schedule_without_scheduled_job_raises(jobs_path: Path) -> None:
@@ -305,7 +258,7 @@ def test_jobs_json_every_source_chains_ingestion_data_quality_and_single_etl() -
     """Every source's DOWNLOAD reaches its INGESTION job, which fans out to a DATA_QUALITY job
     on the same table and a SINGLE_ETL job on <table>_etl (the Union job is not a source chain)."""
     # Arrange
-    jobs = {raw["name"]: raw for raw in _load_shipped()}
+    jobs = {raw["name"]: raw for raw in load_shipped_jobs()}
 
     # Act & Assert
     downloads = [raw for raw in jobs.values() if raw["job_type"] == "DOWNLOAD"]
@@ -346,7 +299,7 @@ def test_jobs_json_every_job_skips_next_jobs_on_error() -> None:
     The flag is documentation only — the DAG maps it to the all_success trigger rule
     (a failed job skips the jobs named in its next_jobs)."""
     # Arrange & Act
-    jobs = _load_shipped()
+    jobs = load_shipped_jobs()
 
     # Assert
     for job in jobs:
@@ -357,19 +310,19 @@ def test_jobs_json_scheduled_jobs_are_the_downloads() -> None:
     """In the shipped registry every DOWNLOAD job is scheduled and every other job is
     downstreamed (no schedule)."""
     # Arrange & Act
-    jobs = _load_shipped()
+    jobs = load_shipped_jobs()
 
     # Assert
     for job in jobs:
         if job["job_type"] == "DOWNLOAD":
-            assert job["schedule"] == "0 8 * * *", job["name"]
+            assert job["schedule"] == CRON, job["name"]
         else:
             assert "schedule" not in job, job["name"]
 
 
 def _shipped_union_jobs() -> list[dict]:
     """Every shipped job of the Union chain: the fan-in root, its DATA_QUALITY job, the VIEW jobs."""
-    return [raw for raw in _load_shipped() if raw["source_name"] == "Union"]
+    return [raw for raw in load_shipped_jobs() if raw["source_name"] == "Union"]
 
 
 def test_jobs_json_union_job_stacks_every_source_table() -> None:
@@ -383,7 +336,7 @@ def test_jobs_json_union_job_stacks_every_source_table() -> None:
     # Assert
     assert single_etl == {
         "name": "SINGLE_ETL-union_etl",
-        "task_id": "Union.single_etl",
+        "task_id": UNION_ROOT_ID,
         "source_name": "Union",
         "job_type": "SINGLE_ETL",
         "table_name": "union_etl",
@@ -399,7 +352,7 @@ def test_jobs_json_union_job_stacks_every_source_table() -> None:
         "is_next_skipped_if_error": True,
         "next_jobs": [],
     }
-    assert len(views) == 17
+    assert len(views) == VIEW_COUNT
     for view in views:
         assert view == {
             "name": f"VIEW-{view['table_name']}",
@@ -421,153 +374,83 @@ def test_shipped_view_jobs_wait_for_the_union_single_etl() -> None:
     views = [job for job in load_jobs() if job.job_type == EJobType.VIEW]
 
     # Assert
-    assert len(views) == 17
+    assert len(views) == VIEW_COUNT
     for view in views:
         spec = specs[view.task_id]
-        assert spec.upstream == ("Union.single_etl",)
+        assert spec.upstream == (UNION_ROOT_ID,)
         assert spec.trigger_rule == "all_success"
-        assert spec.command == (
-            f"cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py VIEW {view.table_name}"
-        )
+        assert spec.command == f"{ETL_CMD_PREFIX} VIEW {view.table_name}"
 
 
-def test_job_get_command_download() -> None:
-    """A DOWNLOAD job builds the run_download.py command with the source name."""
-    # Arrange
-    job = Job(name="DOWNLOAD-NIFC", task_id="NIFC.download", source_name="NIFC", job_type=EJobType.DOWNLOAD)
-
+@pytest.mark.parametrize(
+    ("job", "expected_command"),
+    [
+        pytest.param(
+            Job(name="DOWNLOAD-NIFC", task_id="NIFC.download", source_name="NIFC", job_type=EJobType.DOWNLOAD),
+            "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC",
+            id="download",
+        ),
+        pytest.param(
+            Job(
+                name="INGESTION-nifc_fire",
+                task_id="NIFC.ingestion",
+                source_name="NIFC",
+                job_type=EJobType.INGESTION,
+                table_name="nifc_fire",
+            ),
+            f"{ETL_CMD_PREFIX} INGESTION nifc_fire",
+            id="ingestion",
+        ),
+        pytest.param(
+            Job(
+                name="DATA_QUALITY-nifc_fire",
+                task_id="NIFC.data_quality",
+                source_name="NIFC",
+                job_type=EJobType.DATA_QUALITY,
+                table_name="nifc_fire",
+            ),
+            f"{ETL_CMD_PREFIX} DATA_QUALITY nifc_fire",
+            id="data-quality",
+        ),
+        pytest.param(
+            Job(
+                name="SINGLE_ETL-nifc_fire_etl",
+                task_id="NIFC.single_etl",
+                source_name="NIFC",
+                job_type=EJobType.SINGLE_ETL,
+                table_name="nifc_fire_etl",
+            ),
+            f"{ETL_CMD_PREFIX} SINGLE_ETL nifc_fire_etl",
+            id="single-etl",
+        ),
+        pytest.param(
+            Job(
+                name="VIEW-metrics_flood_vw",
+                task_id="View.metrics_flood_vw",
+                source_name="Union",
+                job_type=EJobType.VIEW,
+                table_name="metrics_flood_vw",
+            ),
+            f"{ETL_CMD_PREFIX} VIEW metrics_flood_vw",
+            id="view",
+        ),
+    ],
+)
+def test_job_get_command_builds_the_run_call(job: Job, expected_command: str) -> None:
+    """Each job type builds its shell command in its repo/conda env with its own argument:
+    the source name for DOWNLOAD, the table name (or view name) for every other job type."""
     # Act
     result = job.get_command()
 
     # Assert
-    assert result == (
-        "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
-    )
+    assert result == expected_command
 
 
-def test_job_get_command_ingestion() -> None:
-    """An INGESTION job builds the run_etl.py command with the table name."""
+@pytest.mark.parametrize("job_type", [EJobType.INGESTION, EJobType.DATA_QUALITY, EJobType.SINGLE_ETL, EJobType.VIEW])
+def test_job_get_command_without_table_name_raises(job_type: EJobType) -> None:
+    """A job type addressing a table without a table_name raises ValueError."""
     # Arrange
-    job = Job(
-        name="INGESTION-nifc_fire",
-        task_id="NIFC.ingestion",
-        source_name="NIFC",
-        job_type=EJobType.INGESTION,
-        table_name="nifc_fire",
-    )
-
-    # Act
-    result = job.get_command()
-
-    # Assert
-    assert result == (
-        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
-    )
-
-
-def test_job_get_command_ingestion_without_table_name_raises() -> None:
-    """An INGESTION job without table_name raises ValueError."""
-    # Arrange
-    job = Job(name="INGESTION-nifc_fire", task_id="NIFC.ingestion", source_name="NIFC", job_type=EJobType.INGESTION)
-
-    # Act & Assert
-    with pytest.raises(ValueError, match="no table_name"):
-        job.get_command()
-
-
-def test_job_get_command_data_quality() -> None:
-    """A DATA_QUALITY job builds the run_etl.py command with the plain table name."""
-    # Arrange
-    job = Job(
-        name="DATA_QUALITY-nifc_fire",
-        task_id="NIFC.data_quality",
-        source_name="NIFC",
-        job_type=EJobType.DATA_QUALITY,
-        table_name="nifc_fire",
-    )
-
-    # Act
-    result = job.get_command()
-
-    # Assert
-    assert result == (
-        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_QUALITY nifc_fire"
-    )
-
-
-def test_job_get_command_data_quality_without_table_name_raises() -> None:
-    """A DATA_QUALITY job without table_name raises ValueError."""
-    # Arrange
-    job = Job(
-        name="DATA_QUALITY-nifc_fire", task_id="NIFC.data_quality", source_name="NIFC", job_type=EJobType.DATA_QUALITY
-    )
-
-    # Act & Assert
-    with pytest.raises(ValueError, match="no table_name"):
-        job.get_command()
-
-
-def test_job_get_command_single_etl() -> None:
-    """A SINGLE_ETL job builds the run_etl.py command with the etl script name."""
-    # Arrange
-    job = Job(
-        name="SINGLE_ETL-nifc_fire_etl",
-        task_id="NIFC.single_etl",
-        source_name="NIFC",
-        job_type=EJobType.SINGLE_ETL,
-        table_name="nifc_fire_etl",
-    )
-
-    # Act
-    result = job.get_command()
-
-    # Assert
-    assert result == (
-        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py SINGLE_ETL nifc_fire_etl"
-    )
-
-
-def test_job_get_command_single_etl_without_table_name_raises() -> None:
-    """A SINGLE_ETL job without table_name raises ValueError."""
-    # Arrange
-    job = Job(
-        name="SINGLE_ETL-nifc_fire_etl",
-        task_id="NIFC.single_etl",
-        source_name="NIFC",
-        job_type=EJobType.SINGLE_ETL,
-    )
-
-    # Act & Assert
-    with pytest.raises(ValueError, match="no table_name"):
-        job.get_command()
-
-
-def test_job_get_command_view() -> None:
-    """A VIEW job builds the run_etl.py command with the view script name."""
-    # Arrange
-    job = Job(
-        name="VIEW-metrics_flood_vw",
-        task_id="View.metrics_flood_vw",
-        source_name="Union",
-        job_type=EJobType.VIEW,
-        table_name="metrics_flood_vw",
-    )
-
-    # Act
-    result = job.get_command()
-
-    # Assert
-    assert result == (
-        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py VIEW metrics_flood_vw"
-    )
-
-
-def test_job_get_command_view_without_table_name_raises() -> None:
-    """A VIEW job without table_name raises ValueError."""
-    # Arrange
-    job = Job(
-        name="VIEW-metrics_flood_vw", task_id="View.metrics_flood_vw", source_name="Union", job_type=EJobType.VIEW
-    )
+    job = Job(name="JOB-no_table", task_id="NIFC.no_table", source_name="NIFC", job_type=job_type)
 
     # Act & Assert
     with pytest.raises(ValueError, match="no table_name"):

@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from model import EJobType, JobConfig, JobTypeConfig, get_dag_settings, get_job_config
+from test._helpers import ETL_CMD_PREFIX
 
 
 def test_job_type_config_creation() -> None:
@@ -23,28 +24,28 @@ def test_job_type_config_creation() -> None:
     assert config.conda_env is None
 
 
-def test_job_type_config_get_command_pattern_string_without_conda_env() -> None:
-    """Without conda_env the command runs the bare python script."""
-    # Arrange
-    config = JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py")
-
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        pytest.param(
+            JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py"),
+            "cd ..;cd GEO_Download;python run_download.py",
+            id="without-conda-env",
+        ),
+        pytest.param(
+            JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
+            ETL_CMD_PREFIX,
+            id="with-conda-env",
+        ),
+    ],
+)
+def test_job_type_config_get_command_pattern_string(config: JobTypeConfig, expected: str) -> None:
+    """Without conda_env the command runs the bare python script, with conda_env it is wrapped in conda run."""
     # Act
     result = config.get_command_pattern_string()
 
     # Assert
-    assert result == "cd ..;cd GEO_Download;python run_download.py"
-
-
-def test_job_type_config_get_command_pattern_string_with_conda_env() -> None:
-    """With conda_env the command is wrapped in conda run."""
-    # Arrange
-    config = JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311")
-
-    # Act
-    result = config.get_command_pattern_string()
-
-    # Assert
-    assert result == "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py"
+    assert result == expected
 
 
 def test_job_type_config_get_command_string() -> None:
@@ -56,9 +57,7 @@ def test_job_type_config_get_command_string() -> None:
     result = config.get_command_string("INGESTION", "nifc_fire")
 
     # Assert
-    assert result == (
-        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py INGESTION nifc_fire"
-    )
+    assert result == f"{ETL_CMD_PREFIX} INGESTION nifc_fire"
 
 
 def test_job_config_creation() -> None:
@@ -186,18 +185,21 @@ def test_dag_settings_defaults() -> None:
     assert settings.pool_slots == {"download": 3, "etl": 2}
 
 
-def test_dag_settings_pool_for_maps_every_job_type() -> None:
+@pytest.mark.parametrize(
+    ("job_type", "pool"),
+    [
+        pytest.param(EJobType.DOWNLOAD, "download", id="download"),
+        pytest.param(EJobType.INGESTION, "etl", id="ingestion"),
+        pytest.param(EJobType.DATA_QUALITY, "etl", id="data-quality"),
+        pytest.param(EJobType.SINGLE_ETL, "etl", id="single-etl"),
+        pytest.param(EJobType.VIEW, "etl", id="view"),
+        pytest.param(EJobType.VERDICT, "etl", id="verdict"),
+    ],
+)
+def test_dag_settings_pool_for_maps_every_job_type(job_type: EJobType, pool: str) -> None:
     """pool_for() resolves the configured pool name for each EJobType."""
-    # Arrange & Act
-    settings = get_dag_settings()
-
-    # Assert
-    assert settings.pool_for(EJobType.DOWNLOAD) == "download"
-    assert settings.pool_for(EJobType.INGESTION) == "etl"
-    assert settings.pool_for(EJobType.DATA_QUALITY) == "etl"
-    assert settings.pool_for(EJobType.SINGLE_ETL) == "etl"
-    assert settings.pool_for(EJobType.VIEW) == "etl"
-    assert settings.pool_for(EJobType.VERDICT) == "etl"
+    # Act & Assert
+    assert get_dag_settings().pool_for(job_type) == pool
 
 
 def test_dag_settings_unknown_timezone_raises(tmp_path: Path) -> None:

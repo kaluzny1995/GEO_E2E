@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -212,7 +213,7 @@ class GEO_DAG:
         """Every subDAG of the mega-DAG: the source chains (jobs.json order) and the union chain."""
         return self._subdags
 
-    @property
+    @cached_property
     def source_subdags(self) -> tuple[JobsSubDAG, ...]:
         """The data-source subDAGs the union fan-in waits for (everything but the union chain)."""
         return tuple(subdag for subdag in self._subdags if subdag.source_name != self._dag_settings.union_source)

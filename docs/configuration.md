@@ -92,6 +92,7 @@ The flat registry of every job the pipeline runs — a JSON **array** of job obj
     "task_id": "USGS_Earthquake.single_etl",
     "source_name": "USGS_Earthquake",
     "job_type": "SINGLE_ETL",
+    "notes": "among 9 single-ETL tasks; `openmeteo_flood_etl`, `usgs_nwis_etl`, `ibtracs_cyclone_etl` and `gdacs_event_etl` share the `state_province` transform via `utils.column_helpers.state_province`"
     "table_name": "usgs_earthquake_etl",
     "is_next_skipped_if_error": true,
     "next_jobs": ["DATA_QUALITY-usgs_earthquake_etl"]
@@ -187,7 +188,7 @@ Besides the nine source chains, `jobs.json` holds the `Union` entry — the fan-
 
 ### View step
 
-Every `VIEW` job is chained under the union root (`SINGLE_ETL-union_etl.next_jobs`), with `table_name` set to the view script name — so the shipped registry has seventeen of them (`metrics_*_vw` and `phenomenons_*_vw`, all reading `geo.union_etl`). They are siblings of `DATA_QUALITY-union_etl`: each waits for the stack with the normal `all_success` rule, runs `run_etl.py VIEW <view_name>` in the `etl` pool and (re)creates its view on the freshly stacked table (see [GEO_ETL — View job](../../GEO_ETL/docs/etl_jobs/view.md)). Like the DATA_QUALITY jobs they are terminal steps of `jobs.json` (only the verdict gate waits on them); because they are siblings, a failed data-quality run does not skip the views and vice versa.
+Every `VIEW` job is chained under the union root (`SINGLE_ETL-union_etl.next_jobs`) (the four single-ETL tasks that share the `state_province` transform via `utils.column_helpers.state_province` are `openmeteo_flood_etl`, `usgs_nwis_etl`, `ibtracs_cyclone_etl` and `gdacs_event_etl` — see GEO_ETL's `utils.column_helpers`), with `table_name` set to the view script name — so the shipped registry has seventeen of them (`metrics_*_vw` and `phenomenons_*_vw`, all reading `geo.union_etl`). They are siblings of `DATA_QUALITY-union_etl`: each waits for the stack with the normal `all_success` rule, runs `run_etl.py VIEW <view_name>` in the `etl` pool and (re)creates its view on the freshly stacked table (see [GEO_ETL — View job](../../GEO_ETL/docs/etl_jobs/view.md)). Like the DATA_QUALITY jobs they are terminal steps of `jobs.json` (only the verdict gate waits on them); because they are siblings, a failed data-quality run does not skip the views and vice versa.
 
 ### Data quality step
 

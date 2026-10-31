@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import util
 
 
@@ -45,29 +47,35 @@ def test_get_memory_info_mocked(mock_vmem: MagicMock) -> None:
     assert percent == 50.0
 
 
+@pytest.mark.parametrize(
+    ("usage", "label", "expected"),
+    [
+        pytest.param(
+            (3.21, 15.54, 20.66),
+            "Worker",
+            "Worker Memory: 3.21 out of 15.54 GiB (20.66 %) used",
+            id="worker",
+        ),
+        pytest.param(
+            (1.50, 8.00, 18.75),
+            "Subprocess",
+            "Subprocess Memory: 1.50 out of 8.00 GiB (18.75 %) used",
+            id="subprocess",
+        ),
+    ],
+)
 @patch("util.get_memory_info")
-def test_log_memory_usage(mock_get_memory: MagicMock) -> None:
-    """Memory usage is written to the given logger in the expected format."""
+def test_log_memory_usage(
+    mock_get_memory: MagicMock, usage: tuple[float, float, float], label: str, expected: str
+) -> None:
+    """Memory usage is written to the given logger as `<label> Memory: <used> out of
+    <total> GiB (<percent> %) used` — the label is part of the logged line."""
     # Arrange
-    mock_get_memory.return_value = (3.21, 15.54, 20.66)
+    mock_get_memory.return_value = usage
     logger = MagicMock()
 
     # Act
-    util.log_memory_usage(logger, "Worker")
+    util.log_memory_usage(logger, label)
 
     # Assert
-    logger.info.assert_called_once_with("Worker Memory: 3.21 out of 15.54 GiB (20.66 %) used")
-
-
-@patch("util.get_memory_info")
-def test_log_memory_usage_subprocess_label(mock_get_memory: MagicMock) -> None:
-    """The label appears in the logged line (e.g. 'Subprocess Memory: ...')."""
-    # Arrange
-    mock_get_memory.return_value = (1.50, 8.00, 18.75)
-    logger = MagicMock()
-
-    # Act
-    util.log_memory_usage(logger, "Subprocess")
-
-    # Assert
-    logger.info.assert_called_once_with("Subprocess Memory: 1.50 out of 8.00 GiB (18.75 %) used")
+    logger.info.assert_called_once_with(expected)

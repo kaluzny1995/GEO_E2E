@@ -5,12 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from model import EJobType, build_task_specs
-
-
-def _load_jobs() -> list[dict]:
-    with open(Path(__file__).resolve().parents[1] / "jobs.json") as f:
-        return json.load(f)
+from model import EJobType, TaskSpec, build_task_specs
+from test._helpers import ETL_CMD_PREFIX, SOURCE_COUNT, UNION_ROOT_ID, load_shipped_jobs
 
 
 def _write_jobs(tmp_path: Path, jobs: list[dict]) -> Path:
@@ -22,19 +18,29 @@ def _write_jobs(tmp_path: Path, jobs: list[dict]) -> Path:
 
 def _expected_fan_in() -> set[str]:
     """The SINGLE_ETL task id every source chain contributes to the union fan-in (from jobs.json)."""
-    return {raw["task_id"] for raw in _load_jobs() if raw["job_type"] == "SINGLE_ETL" and raw["source_name"] != "Union"}
+    return {
+        raw["task_id"]
+        for raw in load_shipped_jobs()
+        if raw["job_type"] == "SINGLE_ETL" and raw["source_name"] != "Union"
+    }
 
 
 def _expected_view_task_ids() -> set[str]:
     """The VIEW task ids of the shipped registry — declared per view in jobs.json."""
-    return {raw["task_id"] for raw in _load_jobs() if raw["job_type"] == "VIEW"}
+    return {raw["task_id"] for raw in load_shipped_jobs() if raw["job_type"] == "VIEW"}
+
+
+@pytest.fixture(scope="module")
+def specs_map() -> dict[str, TaskSpec]:
+    """The task specs of the shipped registry keyed by task id — every test only reads them."""
+    return {spec.task_id: spec for spec in build_task_specs()}
 
 
 def test_specs_cover_every_job_plus_the_verdict() -> None:
     """One spec per job in the jobs.json registry plus the synthesized verdict task, with
     unique task ids (the verdict carries no jobs.json entry — build_task_specs() appends it)."""
     # Arrange
-    jobs = _load_jobs()
+    jobs = load_shipped_jobs()
 
     # Act
     specs = build_task_specs()
@@ -46,10 +52,10 @@ def test_specs_cover_every_job_plus_the_verdict() -> None:
     assert len(task_ids) == len(set(task_ids))
 
 
-def test_source_chain_wiring() -> None:
+def test_source_chain_wiring(specs_map: dict[str, TaskSpec]) -> None:
     """Task ids are the config's task_id fields and every non-root task waits for its parent."""
     # Arrange & Act
-    specs = {spec.task_id: spec for spec in build_task_specs()}
+    specs = specs_map
 
     # Assert
     assert specs["NIFC.download"].upstream == ()
@@ -59,86 +65,84 @@ def test_source_chain_wiring() -> None:
     assert specs["NIFC_etl.data_quality"].upstream == ("NIFC.single_etl",)
 
 
-def test_source_chain_tasks_use_all_success() -> None:
+def test_source_chain_tasks_use_all_success(specs_map: dict[str, TaskSpec]) -> None:
     """Every source-chain task waits with all_success (failed parents skip downstream jobs)."""
     # Arrange & Act
-    specs = build_task_specs()
+    specs = list(specs_map.values())
 
     # Assert
     assert all(spec.trigger_rule == "all_success" for spec in specs if spec.source_name != "Union")
 
 
-def test_union_waits_for_every_single_etl_and_needs_a_success() -> None:
+def test_union_waits_for_every_single_etl_and_needs_a_success(specs_map: dict[str, TaskSpec]) -> None:
     """The union root waits for the SINGLE_ETL task of all nine sources with
     all_done_min_one_success: it starts whatever the chains' results, but only when at least
     one single-ETL succeeded (nothing fresh to stack otherwise) — the DATA_QUALITY jobs stay
     outside the fan-in (the fan-in does not include them)."""
     # Arrange & Act
-    union_specs = {spec.task_id: spec for spec in build_task_specs() if spec.source_name == "Union"}
-    union_root = union_specs["Union.single_etl"]
+    union_specs = {task_id: spec for task_id, spec in specs_map.items() if spec.source_name == "Union"}
+    union_root = union_specs[UNION_ROOT_ID]
 
     # Assert
     assert union_root.trigger_rule == "all_done_min_one_success"
     assert set(union_root.upstream) == _expected_fan_in()
-    assert len(union_root.upstream) == 9
+    assert len(union_root.upstream) == SOURCE_COUNT
     assert set(union_specs) == {
-        "Union.single_etl",
+        UNION_ROOT_ID,
         "Union_etl.data_quality",
         "Union.verdict",
         *_expected_view_task_ids(),
     }
 
 
-def test_only_the_union_root_and_the_verdict_use_the_special_trigger_rules() -> None:
+def test_only_the_union_root_and_the_verdict_use_the_special_trigger_rules(specs_map: dict[str, TaskSpec]) -> None:
     """all_done_min_one_success is reserved for the union root and all_done for the verdict —
     every other task, the union data-quality and view steps included, runs when its parent
     succeeded."""
     # Arrange & Act
-    specs = {spec.task_id: spec for spec in build_task_specs()}
+    specs = specs_map
 
     # Assert
-    assert specs["Union.single_etl"].trigger_rule == "all_done_min_one_success"
+    assert specs[UNION_ROOT_ID].trigger_rule == "all_done_min_one_success"
     assert specs["Union.verdict"].trigger_rule == "all_done"
     assert all(
         spec.trigger_rule == "all_success"
         for task_id, spec in specs.items()
-        if task_id not in {"Union.single_etl", "Union.verdict"}
+        if task_id not in {UNION_ROOT_ID, "Union.verdict"}
     )
 
 
-def test_union_children_keep_all_success() -> None:
+def test_union_children_keep_all_success(specs_map: dict[str, TaskSpec]) -> None:
     """Every job chained under the union root — the DATA_QUALITY step and the seventeen VIEW
     jobs — waits for it with the default all_success rule."""
     # Arrange & Act
-    specs = {spec.task_id: spec for spec in build_task_specs()}
+    specs = specs_map
 
     # Assert
     child = specs["Union_etl.data_quality"]
-    assert child.upstream == ("Union.single_etl",)
+    assert child.upstream == (UNION_ROOT_ID,)
     assert child.trigger_rule == "all_success"
     for task_id in _expected_view_task_ids():
-        assert specs[task_id].upstream == ("Union.single_etl",)
+        assert specs[task_id].upstream == (UNION_ROOT_ID,)
         assert specs[task_id].trigger_rule == "all_success"
 
 
-def test_commands_are_built_from_config() -> None:
+def test_commands_are_built_from_config(specs_map: dict[str, TaskSpec]) -> None:
     """Specs carry the shell commands of config.json (conda run of the source/etl envs)."""
     # Arrange & Act
-    specs = {spec.task_id: spec for spec in build_task_specs()}
+    specs = specs_map
 
     # Assert
     assert specs["NIFC.download"].command == (
         "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
     )
-    assert specs["Union.single_etl"].command == (
-        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py SINGLE_ETL union_etl"
-    )
+    assert specs[UNION_ROOT_ID].command == f"{ETL_CMD_PREFIX} SINGLE_ETL union_etl"
 
 
-def test_job_types_are_preserved_for_pooling() -> None:
+def test_job_types_are_preserved_for_pooling(specs_map: dict[str, TaskSpec]) -> None:
     """job_type is kept on every spec so the DAG can route downloads to the download pool."""
     # Arrange & Act
-    specs = {spec.task_id: spec for spec in build_task_specs()}
+    specs = specs_map
 
     # Assert
     assert specs["NIFC.download"].job_type == EJobType.DOWNLOAD
@@ -152,7 +156,7 @@ def test_job_types_are_preserved_for_pooling() -> None:
 def test_missing_union_source_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A jobs.json without the Union job raises ValueError."""
     # Arrange
-    jobs = [raw for raw in _load_jobs() if raw["source_name"] != "Union"]
+    jobs = [raw for raw in load_shipped_jobs() if raw["source_name"] != "Union"]
     monkeypatch.setattr("model._JOBS_PATH", str(_write_jobs(tmp_path, jobs)))
 
     # Act & Assert
@@ -160,11 +164,11 @@ def test_missing_union_source_raises(tmp_path: Path, monkeypatch: pytest.MonkeyP
         build_task_specs()
 
 
-def test_verdict_waits_for_every_registry_task() -> None:
+def test_verdict_waits_for_every_registry_task(specs_map: dict[str, TaskSpec]) -> None:
     """The synthesized verdict task (job type VERDICT, union source) waits with all_done on
     every registry task — it must start only after every branch reached a terminal state."""
     # Arrange & Act
-    specs = {spec.task_id: spec for spec in build_task_specs()}
+    specs = specs_map
     verdict = specs["Union.verdict"]
     registry_ids = {task_id for task_id in specs if task_id != "Union.verdict"}
 
@@ -175,12 +179,12 @@ def test_verdict_waits_for_every_registry_task() -> None:
     assert len(verdict.upstream) == len(registry_ids)  # every registry task once, no duplicates
 
 
-def test_the_verdict_is_the_dags_only_leaf() -> None:
+def test_the_verdict_is_the_dags_only_leaf(specs_map: dict[str, TaskSpec]) -> None:
     """Every registry task has a downstream successor (the verdict), so the verdict is the
     DAG's only leaf — Airflow derives a run's state from its leaf tasks, which is what makes
     the run reflect the union result alone."""
     # Arrange & Act
-    specs = build_task_specs()
+    specs = list(specs_map.values())
     waited_on = {upstream_id for spec in specs for upstream_id in spec.upstream}
     leaves = [spec.task_id for spec in specs if spec.task_id not in waited_on]
 
@@ -188,14 +192,14 @@ def test_the_verdict_is_the_dags_only_leaf() -> None:
     assert leaves == ["Union.verdict"]
 
 
-def test_verdict_command_reads_the_union_root_state() -> None:
+def test_verdict_command_reads_the_union_root_state(specs_map: dict[str, TaskSpec]) -> None:
     """The verdict's command is a Jinja template reading the union root's state of the current
     run through ti.get_task_states() — it exits 1 unless that state is `success`."""
     # Arrange & Act
-    verdict = {spec.task_id: spec for spec in build_task_specs()}["Union.verdict"]
+    verdict = specs_map["Union.verdict"]
 
     # Assert
-    assert verdict.command.startswith("{% set task = 'Union.single_etl' %}")
+    assert verdict.command.startswith(f"{{% set task = '{UNION_ROOT_ID}' %}}")
     assert "ti.get_task_states(ti.dag_id, task_ids=[task], run_ids=[run_id])" in verdict.command
     assert "{% if state == 'success' %}" in verdict.command
     assert verdict.command.count("exit 1") == 1
@@ -205,7 +209,7 @@ def test_verdict_job_declared_in_jobs_json_raises(tmp_path: Path, monkeypatch: p
     """A registry declaring a VERDICT job fails — build_task_specs() synthesizes the verdict task."""
     # Arrange
     jobs = [
-        *_load_jobs(),
+        *load_shipped_jobs(),
         {
             "name": "VERDICT-union",
             "task_id": "union_verdict",
@@ -227,7 +231,7 @@ def test_task_ids_come_from_the_config(tmp_path: Path, monkeypatch: pytest.Monke
     # Arrange
     jobs = [
         dict(raw, task_id="NIFC.custom_name") if raw["name"] == "SINGLE_ETL-nifc_fire_etl" else raw
-        for raw in _load_jobs()
+        for raw in load_shipped_jobs()
     ]
     monkeypatch.setattr("model._JOBS_PATH", str(_write_jobs(tmp_path, jobs)))
 
@@ -238,13 +242,15 @@ def test_task_ids_come_from_the_config(tmp_path: Path, monkeypatch: pytest.Monke
     assert "NIFC.single_etl" not in specs
     assert specs["NIFC.custom_name"].job_type == EJobType.SINGLE_ETL
     assert specs["NIFC_etl.data_quality"].upstream == ("NIFC.custom_name",)
-    assert "NIFC.custom_name" in specs["Union.single_etl"].upstream
+    assert "NIFC.custom_name" in specs[UNION_ROOT_ID].upstream
 
 
 def test_reserved_verdict_task_id_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A registry job claiming Union.verdict — the synthesized verdict's id — fails."""
     # Arrange
-    jobs = [dict(raw, task_id="Union.verdict") if raw["name"] == "DOWNLOAD-NIFC" else raw for raw in _load_jobs()]
+    jobs = [
+        dict(raw, task_id="Union.verdict") if raw["name"] == "DOWNLOAD-NIFC" else raw for raw in load_shipped_jobs()
+    ]
     monkeypatch.setattr("model._JOBS_PATH", str(_write_jobs(tmp_path, jobs)))
 
     # Act & Assert
