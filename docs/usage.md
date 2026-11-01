@@ -4,18 +4,18 @@
 
 ## Start the Airflow stack
 
-> **Prerequisite:** `.env.local` must exist in the project root — `docker compose --env-file .env.local` fails fast with `required variable GEO_ROOT is missing` otherwise. Create it once per checkout: `./setup.sh` writes it with the paths detected from this clone (manual fallback: `cp .env.example .env.local` and adjust the six values, including the Airflow UI login) — see [README — Setup](../README.md#2-configure-environment-variables-mandatory).
+> **Prerequisite:** `.env` must exist in the project root — `docker compose --env-file .env` fails fast with `required variable GEO_ROOT is missing` otherwise. Create it once per checkout: `./setup.sh` writes it with the paths detected from this clone (manual fallback: `cp .env.example .env` and adjust the six values, including the Airflow UI login) — see [README — Setup](../README.md#2-configure-environment-variables-mandatory).
 
 Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-docker compose --env-file .env.local up -d --build
+docker compose --env-file .env up -d --build
 ```
 
 This builds the Airflow image (first run only) and starts the one-shot `airflow-init` (Supabase schema creation, DB migration, admin user, pool seeding), the DAG processor, the scheduler and the API server, plus the Spark cluster. Follow the scheduler to watch task execution:
 
 ```bash
-docker compose --env-file .env.local logs -f airflow-scheduler
+docker compose --env-file .env logs -f airflow-scheduler
 ```
 
 > The Airflow containers use `network_mode: host`, so task subprocesses reach Spark at `spark://localhost:7078` and your host conda envs via their bind-mounted absolute paths. See [README — Setup](../README.md#3-start-services-with-docker-compose).
@@ -24,7 +24,7 @@ docker compose --env-file .env.local logs -f airflow-scheduler
 
 ## The web UI
 
-Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env.local`):
+Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env`):
 
 | Page | Use it for |
 |------|------------|
@@ -43,7 +43,7 @@ Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin`
 **Whole DAG** — **Trigger DAG** button in the UI (top right of the DAG details), or via the CLI container:
 
 ```bash
-docker compose --env-file .env.local run --rm airflow-cli dags trigger geo_pipeline
+docker compose --env-file .env run --rm airflow-cli dags trigger geo_pipeline
 ```
 
 The run's own status is decided by `Union.verdict`, the last task of the graph: once every
@@ -61,7 +61,7 @@ state from the metadata DB.)
 - **Standalone, without recording a run** — `tasks test` executes one task once in a temporary run, keeping nothing in the metadata DB (useful for debugging a job in isolation; the memory callback still writes to the output):
 
 ```bash
-docker compose --env-file .env.local run --rm airflow-cli tasks test geo_pipeline NIFC.download
+docker compose --env-file .env run --rm airflow-cli tasks test geo_pipeline NIFC.download
 ```
 
 ## Pause / unpause the schedule
@@ -69,8 +69,8 @@ docker compose --env-file .env.local run --rm airflow-cli tasks test geo_pipelin
 The **Active/Paused** toggle next to `geo_pipeline` on the **DAGs** page turns the daily 08:00 schedule off/on. Same via the CLI container:
 
 ```bash
-docker compose --env-file .env.local run --rm airflow-cli dags pause geo_pipeline     # schedule off
-docker compose --env-file .env.local run --rm airflow-cli dags unpause geo_pipeline   # schedule on
+docker compose --env-file .env run --rm airflow-cli dags pause geo_pipeline     # schedule off
+docker compose --env-file .env run --rm airflow-cli dags unpause geo_pipeline   # schedule on
 ```
 
 Pausing stops only *scheduled* runs — a manual **Trigger DAG** still works while paused, and already-running runs finish normally.
@@ -78,10 +78,10 @@ Pausing stops only *scheduled* runs — a manual **Trigger DAG** still works whi
 Useful debugging commands (the `airflow-cli` service is behind the `debug` compose profile):
 
 ```bash
-docker compose --env-file .env.local run --rm airflow-cli dags list                  # confirm geo_pipeline is discovered
-docker compose --env-file .env.local run --rm airflow-cli dags list-import-errors    # empty = the DAG file parses cleanly
-docker compose --env-file .env.local run --rm airflow-cli tasks states-for-dag-run geo_pipeline <run_id>
-docker compose --env-file .env.local run --rm airflow-cli pools list
+docker compose --env-file .env run --rm airflow-cli dags list                  # confirm geo_pipeline is discovered
+docker compose --env-file .env run --rm airflow-cli dags list-import-errors    # empty = the DAG file parses cleanly
+docker compose --env-file .env run --rm airflow-cli tasks states-for-dag-run geo_pipeline <run_id>
+docker compose --env-file .env run --rm airflow-cli pools list
 ```
 
 ## Logs

@@ -2,7 +2,7 @@
 Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
 detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
 Supabase credentials into the sibling GEO_ETL/.env and GEO_API/.env (setup lives here).
-Git-ignored; docker compose reads it through `--env-file .env.local` (see README — Setup).
+Git-ignored; docker compose reads it through `--env-file .env` (see README — Setup).
 In a Docker container it writes .env.docker instead, non-interactively (defaults only).
 
 Usage: .\setup.ps1 [-Force] [-Help]
@@ -86,7 +86,7 @@ function Read-PromptValue {
 }
 
 $inContainer = Test-InContainer
-$envFile = '.env.local'
+$envFile = '.env'
 if ($inContainer) { $envFile = '.env.docker' }
 
 $projectDir = Split-Path -Parent $PSCommandPath
@@ -137,8 +137,8 @@ function Sync-SiblingEnv {
             }
         }
         else {
-            $lines.Add("# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env.local by GEO_E2E's setup.ps1")
-            $lines.Add('# Set them in GEO_E2E/.env.local first (see GEO_E2E/.env.example); this file is gitignored.')
+            $lines.Add("# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env by GEO_E2E's setup.ps1")
+            $lines.Add('# Set them in GEO_E2E/.env first (see GEO_E2E/.env.example); this file is gitignored.')
         }
         foreach ($k in $supabaseKeys) { if ($Values[$k]) { $lines.Add("$k=$($Values[$k])") } }
         $utf8NoBomEnv = New-Object System.Text.UTF8Encoding($false)
@@ -219,8 +219,8 @@ if ($inContainer) {
     $nextLine = "Wrote $envPath (in-container run — compose step not applicable)"
 } else {
     $condaComment = '# Conda installation on the host (bind-mounted into the Airflow containers)'
-    $fileComment = 'Regenerate with .\setup.ps1 -Force, or edit by hand; docker compose reads it through the --env-file .env.local flag.'
-    $nextLine = 'Next: docker compose --env-file .env.local up -d --build'
+    $fileComment = 'Regenerate with .\setup.ps1 -Force, or edit by hand; docker compose reads it through the --env-file .env flag.'
+    $nextLine = 'Next: docker compose --env-file .env up -d --build'
 }
 
 if (-not (Test-Path -LiteralPath $condaRoot)) {
@@ -242,7 +242,7 @@ if (-not $defaultPassword) { $defaultPassword = 'airflow_admin' }
 $password = Read-PromptValue $defaultPassword 'Airflow UI password (_AIRFLOW_WWW_USER_PASSWORD)'
 
 # Supabase credentials are secrets: never prompted (they would land in the scrollback) —
-# the primary place to set them is this file (.env.local); a previous value of .env.local or
+# the primary place to set them is this file (.env); a previous value of .env or
 # of a sibling GEO_ETL/.env / GEO_API/.env is re-used, else they stay empty (compose then
 # fails with a message naming the missing variable). Sync-SiblingEnv mirrors the result back
 # into both siblings, so every project runs with the same credentials.

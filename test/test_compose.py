@@ -66,8 +66,8 @@ def test_env_example_documents_the_supabase_variables() -> None:
 def test_credentials_stay_out_of_git() -> None:
     """The env file holding the Supabase password is git-ignored; only the template is committed."""
     ignored = {line.strip() for line in _GITIGNORE.splitlines() if line.strip() and not line.startswith("#")}
-    assert ".env.local" in ignored
     assert ".env" in ignored
+    assert ".env.docker" in ignored
     assert ".env.example" not in ignored
 
 
@@ -82,7 +82,7 @@ def test_setup_scripts_write_the_supabase_variables() -> None:
 def test_setup_scripts_mirror_the_credentials_into_the_sibling_projects() -> None:
     """The Supabase setup lives here: both setup scripts must also write GEO_ETL/.env and
     GEO_API/.env, so the sibling projects read the same SUPABASE_DB_* values without their own
-    setup — including on a plain re-run that leaves an existing .env.local untouched."""
+    setup — including on a plain re-run that leaves an existing .env untouched."""
     # a call immediately followed by `exit 0` = the "env file already exists" early-exit path
     early_exit_call = {
         "setup.sh": "    sync_sibling_envs\n    exit 0\n",

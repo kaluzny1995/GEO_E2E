@@ -2,10 +2,11 @@
 __pycache__/
 *.pyc
 .env
-.env.local
 .env.docker
 /logs/
 .tox/
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
+/docker/spark/jars/*
+!/docker/spark/jars/.gitkeep

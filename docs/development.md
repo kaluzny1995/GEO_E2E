@@ -28,7 +28,7 @@ The Airflow conversion (`geo_dag.py`) is unit-tested in the project env and skip
 conda run -n geo_e2e_311 python -c "import geo_pipeline"
 ```
 
-Problems that only show up against the container (e.g. broken job config) still surface in the Airflow UI (**Import Errors**) and via `docker compose --env-file .env.local run airflow-cli dags list-import-errors`.
+Problems that only show up against the container (e.g. broken job config) still surface in the Airflow UI (**Import Errors**) and via `docker compose --env-file .env run airflow-cli dags list-import-errors`.
 
 ## Ruff, mypy and tox
 

@@ -8,12 +8,12 @@
 GEO_E2E/
 ├── README.md                 # Overview, setup and quick start
 ├── docker-compose.yaml       # Airflow stack (init, scheduler, API server, DAG processor → Supabase) + Spark cluster
-├── .env.example              # Template for the machine-specific .env.local (committed)
-├── .env.local                # Machine-specific paths (written by ./setup.sh, not in git)
-├── setup.sh                  # Bootstrap: writes .env.local (+ login) from this checkout; in a container writes .env.docker
+├── .env.example              # Template for the machine-specific .env (committed)
+├── .env                      # Machine-specific paths (written by ./setup.sh, not in git)
+├── setup.sh                  # Bootstrap: writes .env (+ login) from this checkout; in a container writes .env.docker
 ├── setup.ps1                 # Windows twin of setup.sh — same detection, same file names
 ├── setup.command             # macOS double-click entry point — thin wrapper that runs setup.sh
-├── .gitignore                # Excludes .env, .env.local, .env.docker, logs/, __pycache__, .tox, IDE files
+├── .gitignore                # Excludes .env, .env.docker, logs/, __pycache__, .tox, IDE files
 ├── config.json               # Job config (command templates per job type)
 ├── jobs.json                 # Flat job registry: one object per job, next_jobs = name references
 ├── model.py                  # Pydantic models: JobConfig, Job, TaskSpec, build_task_specs()
@@ -25,9 +25,12 @@ GEO_E2E/
 ├── pyproject.toml            # Ruff rules, formatter style, mypy files and pytest options
 ├── tox.ini                   # lint / test / typecheck / format / warnings environments
 ├── docker/
-│   └── airflow/
-│       ├── Dockerfile        # apache/airflow:3.3.2 + providers-standard, psutil, pydantic, conda symlink
-│       └── seed_pools.py     # seeds the Airflow pools from config.json (dag.pool_slots) on startup
+│   ├── airflow/
+│   │   ├── Dockerfile        # apache/airflow:3.3.2 + providers-standard, psutil, pydantic, conda symlink
+│   │   └── seed_pools.py     # seeds the Airflow pools from config.json (dag.pool_slots) on startup
+│   └── spark/
+│       ├── Dockerfile        # Custom Spark image (apache/spark:3.5.5 + JARs)
+│       └── jars/             # Hadoop AWS, PostgreSQL JDBC, spark-monitor (gitignored)
 ├── docs/                     # Extended documentation (this file lives here)
 └── test/                     # Unit tests
     ├── __init__.py
@@ -46,14 +49,15 @@ GEO_E2E/
 | `util.py` | `get_memory_info()` and `log_memory_usage()` — used as `on_success_callback` / `on_failure_callback` of every task |
 | `config.json` | Command templates for `DOWNLOAD`/`INGESTION`/`DATA_QUALITY`/`SINGLE_ETL`/`VIEW` (folder, script, conda env) |
 | `jobs.json` | Flat job list — one object per job (`name`, `job_type`, `next_jobs` as name references) — plus the `Union` job |
-| `docker-compose.yaml` | Airflow services (`network_mode: host`, UI on `8090`, metadata DB = Supabase Postgres from `.env.local`) plus the Spark cluster |
-| `setup.sh` | Writes the git-ignored `.env.local` once per checkout — `GEO_ROOT`/`GEO_DATA_DIR` from the clone's location, `CONDA_ROOT` from `conda info --base`, `AIRFLOW_UID` from `id -u`, the Airflow UI login (`--force` keeps the existing one) and the `SUPABASE_DB_*` credentials (re-used from an existing file or from a sibling `GEO_ETL/.env` / `GEO_API/.env`, then mirrored into both `../GEO_ETL/.env` and `../GEO_API/.env`); compose reads it via `--env-file .env.local` |
+| `docker-compose.yaml` | Airflow services (`network_mode: host`, UI on `8090`, metadata DB = Supabase Postgres from `.env`) plus the Spark cluster |
+| `setup.sh` | Writes the git-ignored `.env` once per checkout — `GEO_ROOT`/`GEO_DATA_DIR` from the clone's location, `CONDA_ROOT` from `conda info --base`, `AIRFLOW_UID` from `id -u`, the Airflow UI login (`--force` keeps the existing one) and the `SUPABASE_DB_*` credentials (re-used from an existing file or from a sibling `GEO_ETL/.env` / `GEO_API/.env`, then mirrored into both `../GEO_ETL/.env` and `../GEO_API/.env`); compose reads it via `--env-file .env` |
 | `docker/airflow/Dockerfile` | Extends `apache/airflow:3.3.2-python3.11` with `apache-airflow-providers-standard`, `psutil`, `pydantic` (pinned to the Airflow constraints) and a `conda` symlink to the host conda (bind-mounted at runtime) |
 | `docker/airflow/create_schema.py` | Creates the `geo_airflow` schema on Supabase — `airflow-init` runs it before `airflow db migrate`, so the migration's tables land in the schema the connection's `search_path` points at |
+| `docker/spark/Dockerfile` | Custom Spark image (`apache/spark:3.5.5` + Hadoop AWS, PostgreSQL JDBC and `spark-monitor` JARs) — `docker-compose.yaml` builds it from `./docker/spark` for the master and both workers |
 
 ## How it works
 
-1. The Airflow scheduler triggers the `geo_pipeline` DAG on the cron declared by the **scheduled jobs** in `jobs.json` (the nine `DOWNLOAD` roots, all `0 8 * * *` — `model.resolve_schedule()` requires them to agree, since Airflow schedules whole DAGs; `catchup`/`max_active_runs`/timezone come from the `dag` block of `config.json`). Downstreamed jobs (no `schedule`) start when their parent finishes. The DAG is created unpaused on first parse (`dags_are_paused_at_creation=false`), and the `download`/`etl` pools are seeded by `airflow-init` from `dag.pool_slots` (`docker/airflow/seed_pools.py`) on every `docker compose up`. The DAGs folder is the whole `GEO_E2E` directory (`AIRFLOW__CORE__DAGS_FOLDER` in `docker-compose.yaml`) and `.airflowignore` excludes everything else from the scan, so `geo_pipeline.py` is the only file parsed as a DAG. Airflow's metadata lives in **Supabase Postgres**: `.env.local` supplies the `SUPABASE_DB_*` credentials, `docker-compose.yaml` builds `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` from them with `sslmode=require` and `search_path=geo_airflow`, and `airflow-init` creates that schema (`docker/airflow/create_schema.py`) before running the migration — no local Postgres container is involved.
+1. The Airflow scheduler triggers the `geo_pipeline` DAG on the cron declared by the **scheduled jobs** in `jobs.json` (the nine `DOWNLOAD` roots, all `0 8 * * *` — `model.resolve_schedule()` requires them to agree, since Airflow schedules whole DAGs; `catchup`/`max_active_runs`/timezone come from the `dag` block of `config.json`). Downstreamed jobs (no `schedule`) start when their parent finishes. The DAG is created unpaused on first parse (`dags_are_paused_at_creation=false`), and the `download`/`etl` pools are seeded by `airflow-init` from `dag.pool_slots` (`docker/airflow/seed_pools.py`) on every `docker compose up`. The DAGs folder is the whole `GEO_E2E` directory (`AIRFLOW__CORE__DAGS_FOLDER` in `docker-compose.yaml`) and `.airflowignore` excludes everything else from the scan, so `geo_pipeline.py` is the only file parsed as a DAG. Airflow's metadata lives in **Supabase Postgres**: `.env` supplies the `SUPABASE_DB_*` credentials, `docker-compose.yaml` builds `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` from them with `sslmode=require` and `search_path=geo_airflow`, and `airflow-init` creates that schema (`docker/airflow/create_schema.py`) before running the migration — no local Postgres container is involved.
 2. At DAG-parse time, `geo_pipeline.py` calls `model.build_task_specs()`, which loads every chain from `jobs.json` and flattens it into `TaskSpec`s — one per job, with the task id taken from the job's `task_id` field in the registry (`NIFC.download`, `NIFC.single_etl`, `NIFC_etl.data_quality`, `View.metrics_flood_vw`, …) and the shell command built from the `job` block of `config.json` — for `DOWNLOAD`: `cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py <source_name>`.
 3. `geo_pipeline.py` delegates the conversion to `geo_dag.GEO_DAG`: it groups the specs by `source_name` into ten `geo_dag.JobsSubDAG`s (the nine source chains in `jobs.json` order, then the union chain), every subDAG creates one `BashOperator` per spec (`cwd` = the GEO_E2E directory, so the `cd ..;cd GEO_*` commands resolve the sibling projects, pool by job type, trigger rule from the spec) and wires the dependencies **inside** itself; `GEO_DAG.to_airflow()` then wires the dependencies **between** subDAGs — the union fan-in and the verdict task's edges. Tasks with `next_jobs` use the default `all_success` trigger rule; the union root uses `all_done_min_one_success`, the verdict `all_done`.
 4. At run time the scheduler (LocalExecutor) executes each task as a subprocess inside the scheduler container: `conda` is on the image's `PATH` (symlink to the bind-mounted host conda), and the `geo_download_311` / `geo_etl_311` envs are found at their absolute host paths.

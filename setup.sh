@@ -2,7 +2,7 @@
 # Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
 # detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
 # Supabase credentials into the sibling GEO_ETL/.env and GEO_API/.env (setup lives here).
-# Git-ignored; docker compose reads it through `--env-file .env.local` (see README — Setup).
+# Git-ignored; docker compose reads it through `--env-file .env` (see README — Setup).
 # In a Docker container it writes .env.docker instead, non-interactively (defaults only).
 #
 # Usage: ./setup.sh [--force] [--help]
@@ -20,7 +20,7 @@ if in_container; then
     IN_CONTAINER=true
 fi
 
-ENV_FILE=".env.local"
+ENV_FILE=".env"
 if [[ "$IN_CONTAINER" == true ]]; then
     ENV_FILE=".env.docker"
 fi
@@ -70,8 +70,8 @@ sync_sibling_envs() {
             grep -E -v "$keys_re" "$target" > "$tmp" || true
         else
             {
-                echo "# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env.local by GEO_E2E's ./setup.sh"
-                echo "# Set them in GEO_E2E/.env.local first (see GEO_E2E/.env.example); this file is gitignored."
+                echo "# Supabase PostgreSQL credentials — mirrored from GEO_E2E/.env by GEO_E2E's ./setup.sh"
+                echo "# Set them in GEO_E2E/.env first (see GEO_E2E/.env.example); this file is gitignored."
             } > "$tmp"
         fi
         for key in "${SUPABASE_KEYS[@]}"; do
@@ -119,8 +119,8 @@ prompt() {
 }
 
 # Supabase credentials are secrets: they are never prompted (they would land in the terminal
-# scrollback) — the primary place to set them is this file (.env.local); a previous value of
-# .env.local or of a sibling GEO_ETL/.env / GEO_API/.env is re-used, else they stay empty
+# scrollback) — the primary place to set them is this file (.env); a previous value of
+# .env or of a sibling GEO_ETL/.env / GEO_API/.env is re-used, else they stay empty
 # (docker compose then fails with a message naming the missing variable). sync_sibling_envs()
 # mirrors the result back into both siblings, so every project runs with the same credentials.
 supabase_value() {
@@ -171,8 +171,8 @@ if [[ "$IN_CONTAINER" == true ]]; then
 else
     CONDA_COMMENT="# Conda installation on the host (bind-mounted into the Airflow containers)"
     UID_COMMENT="# Host uid of your user so containers can write to bind mounts"
-    FILE_COMMENT="Regenerate with ./setup.sh --force, or edit by hand; docker compose reads it through the --env-file .env.local flag."
-    NEXT_LINE="Next: docker compose --env-file .env.local up -d --build"
+    FILE_COMMENT="Regenerate with ./setup.sh --force, or edit by hand; docker compose reads it through the --env-file .env flag."
+    NEXT_LINE="Next: docker compose --env-file .env up -d --build"
 fi
 
 if [[ ! -d "$CONDA_ROOT" ]]; then
