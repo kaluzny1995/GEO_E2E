@@ -2,7 +2,7 @@
 
 # Configuration Reference
 
-`config.json` defines **how** each job type is executed (the `job` block) and holds the DAG-level runtime knobs (the `dag` block: retries, pools, ...); `jobs.json` defines **which** jobs each source runs, how they depend on each other, and which of them are scheduled (each scheduled job carries its own `schedule`). The DAG file `geo_pipeline.py` only turns those configs into Airflow tasks. Machine-specific values — paths, the UI login and the Supabase credentials of Airflow's metadata DB — live outside both, in the git-ignored `.env` (see [Supabase metadata DB](#supabase-metadata-db-env)).
+`config.json` defines **how** each job type is executed (the `job` block) and holds the DAG-level runtime knobs (the `dag` block: retries, pools, ...); `jobs.json` defines **which** jobs each source runs, how they depend on each other, and which of them are scheduled (each scheduled job carries its own `schedule`). The DAG file `geo_pipeline.py` only turns those configs into Airflow tasks. Runtime values — the Airflow UI login and the Supabase credentials of Airflow's metadata DB — live outside both, in the git-ignored `.env`; the Docker containers receive them from the Compose `environment:` section (see [Supabase metadata DB](#supabase-metadata-db-env)).
 
 ## Job Config (`config.json`)
 
@@ -305,13 +305,13 @@ The runtime knobs live in the `dag` block of `config.json`, loaded via pydantic 
 | `execution_timeout_minutes` | `30` | Per-task timeout (parity with the old `task_time_limit`) |
 | `union_source` | `Union` | `source_name` of the fan-in job in `jobs.json` — must match exactly one root job there |
 | `pools` | download/etl | Airflow pool per job type (`DOWNLOAD` → `download`, everything else — `VIEW` and the synthesized `VERDICT` task included — → `etl`) |
-| `pool_slots` | 3 / 2 | Slot count per pool — seeded by `airflow-init` on every `docker compose up` via `docker/airflow/seed_pools.py` (idempotent) |
+| `pool_slots` | 3 / 2 | Slot count per pool — seeded by `airflow-init` on every `docker compose up` via `docker/geo_airflow_spark/seed_pools.py` (idempotent) |
 
-You can inspect the pools under **Admin → Pools** or via `docker compose --env-file .env run --rm airflow-cli pools list`. The DAG itself is created unpaused (`dags_are_paused_at_creation=false` in `docker-compose.yaml`).
+You can inspect the pools under **Admin → Pools** or via `docker compose run --rm airflow-cli pools list`. The DAG itself is created unpaused (`dags_are_paused_at_creation=false` in `docker-compose.yaml`; `airflow-dag-activate` also repairs an already-paused DAG).
 
 ## Supabase metadata DB (`.env`)
 
-Airflow's metadata DB is the **Supabase** Postgres of the GEO_ETL project — there is no local Postgres container (the old one's data volume `geo_e2e_postgres_data` survives as a backup until you prune it). `docker-compose.yaml` assembles the connection from environment variables that live in the git-ignored `.env` (template: `.env.example`). **This project is where the Supabase setup lives for the whole pipeline**: `./setup.sh` re-uses whatever `.env`, `../GEO_ETL/.env` or `../GEO_API/.env` already contains and then mirrors the five `SUPABASE_DB_*` values into **all three files** — the ETL and the API read them from their own gitignored `.env`, so neither sibling needs a separate setup:
+Airflow's metadata DB, GEO_ETL's JDBC writes and GEO_API's queries all use the **Supabase** Postgres of the GEO_ETL project — there is no local Postgres container. `docker-compose.yaml` assembles Airflow's connection from the five variables in the git-ignored `.env` (template: `.env.example`).
 
 | Variable | Shipped value | Description |
 |----------|---------------|-------------|
@@ -331,22 +331,31 @@ postgresql+psycopg2://<user>@<host>:6543/postgres?sslmode=require&options=-c%20s
 - `sslmode=require` — Supabase terminates TLS on the pooler.
 - `search_path=geo_airflow` — every connection resolves unqualified table names in that schema, so all Airflow tables live in **`geo_airflow`** and nothing lands in `public`.
 - The **password is not part of the URL** — compose passes it as `PGPASSWORD`, which libpq reads at connect time, so no character needs URL-encoding (the same separation GEO_ETL uses for its JDBC properties).
-- The schema itself is created by `docker/airflow/create_schema.py`, which `airflow-init` runs *before* `airflow db migrate` — Postgres does not create schemas on its own, and without the step the migration would silently fall back to `public`. The script is idempotent, so every `docker compose up` re-checks it.
+- The schema itself is created by `docker/geo_airflow_spark/create_schema.py`, which `airflow-init` runs *before* `airflow db migrate` — Postgres does not create schemas on its own, and without the step the migration would silently fall back to `public`. The script is idempotent, so every `docker compose up` re-checks it.
+
+### Credentials are injected at runtime
+
+The images are built without secrets:
+
+- Every Airflow service (`scheduler`, `api-server`, `dag-processor`) starts through `docker/geo_airflow_spark/airflow-entrypoint.sh`, which runs `refresh-env.sh` — `setup.sh` with `GEO_DOCKER=1` — and writes the Compose-provided values into that container's `/opt/geo/GEO_E2E/.env` and `/opt/geo/GEO_ETL/.env`. Each container has its own writable copy of the baked-in projects, so these files must be refreshed per container.
+- `airflow-init` runs the same refresh before creating the schema and running the migration.
+- `geo_fastapi`'s entrypoint writes `/opt/geo/GEO_API/.env` from its Compose `environment:` block.
+
+The sibling `.env` files therefore always match the Compose credentials, but rebuilding an image never embeds the Supabase password.
 
 ### Step by step: filling in `.env`
 
-For a fresh clone from GitHub (no sibling `GEO_ETL` checkout to copy from). **Only two things need your input: the Airflow UI login and the five `SUPABASE_DB_*` values — paths, uid and schema are detected, not typed.**
+For a fresh Docker-only checkout, **only the five `SUPABASE_DB_*` values are required**. Airflow defaults to `airflow_admin` / `airflow_admin`.
 
-1. **Create the env file** — either run the bootstrap script (detects everything it can and asks only for the UI login):
+1. **Create the env file**:
 
    ```bash
-   ./setup.sh            # --force to regenerate an existing file
+   cp .env.example .env
    ```
 
-   or do it by hand: `cp .env.example .env` and edit it.
-2. **Machine values** — `GEO_ROOT` (parent dir of the sibling `GEO_Download` / `GEO_ETL` folders), `GEO_DATA_DIR`, `CONDA_ROOT` (conda base dir, e.g. `$(conda info --base)`) and `AIRFLOW_UID` (`id -u` on Linux/macOS; `1000` on Windows) — **you never set these yourself**: `setup.sh` detects all four from this checkout (only a missing conda is prompted), and the script writes them into `.env` for you.
-3. **Airflow UI login** — `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD`: anything you like; `airflow-init` creates that admin user on first start (default `airflow_admin` / `airflow_admin`).
-4. **Supabase host, port, database, user** — open the [Supabase dashboard](https://supabase.com/dashboard) and select the project → click **Connect** (top right) → under *Connect to your database* open **Connection pooling → Transaction pooler** → copy the four values straight into `.env`:
+   or let `./setup.sh` generate it (it imports existing credentials from `.env`, `../GEO_ETL/.env` or `../GEO_API/.env` when present).
+2. **Airflow UI login** — `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD`: `airflow_admin` / `airflow_admin` are the defaults; change them only if you want a different admin login. `airflow-init` creates that user on first start.
+3. **Supabase host, port, database, user** — open the [Supabase dashboard](https://supabase.com/dashboard) and select the project → **Connect** → *Connection pooling → Transaction pooler* → copy the four values into `.env`:
 
    | Variable | Comes from | Typical value |
    |----------|------------|---------------|
@@ -356,14 +365,18 @@ For a fresh clone from GitHub (no sibling `GEO_ETL` checkout to copy from). **On
    | `SUPABASE_DB_USER` | *Transaction pooler* → **User** | `postgres.<project-ref>` |
 
    > `6543` is the **transaction pooler**; the direct primary listener uses `5432`. Airflow holds long-lived pooled connections, so the pooler (with the defaults `sql_alchemy_pool_pre_ping = true`, `sql_alchemy_pool_recycle = 1800`) is the right port — the same one GEO_ETL uses.
+4. **Supabase password** — `SUPABASE_DB_PASSWORD` is **never displayed** in the dashboard: use the value you saved when the project was created, or go to **Project Settings → Database → Generate password** (formerly *Reset database password*). That rotation invalidates the previous password immediately. See [GEO_ETL — Supabase Credentials](../../GEO_ETL/docs/configuration.md#supabase-credentials) for the walkthrough, API/PAT rotation and a least-privilege role.
+5. **Schema** — leave `AIRFLOW_DB_SCHEMA=geo_airflow`. On the first `docker compose up`, `airflow-init` creates it and runs the migration into it.
+6. **Optional React API URL** — `VITE_API_BASE` is compiled into `geo_react_app`; keep `http://localhost:8000` when the browser runs on the Docker host.
+7. **Check** — `docker compose config --quiet` renders the file and fails with the name of any missing key. To verify the metadata connection and schema:
 
-5. **Supabase password** — `SUPABASE_DB_PASSWORD` is **never displayed** in the dashboard: use the value you saved when the project was created, or go to **Project Settings → Database → Generate password** (formerly *Reset database password*). That rotation invalidates the previous password immediately, so update every other client at once (the sibling `GEO_ETL/.env` and `GEO_API/.env` share the project). See [GEO_ETL — Supabase Credentials](../../GEO_ETL/docs/configuration.md#supabase-credentials) for the same walkthrough, the API/PAT rotation and a least-privilege role.
-6. **Schema** — leave `AIRFLOW_DB_SCHEMA=geo_airflow`. On the first `docker compose --env-file .env up`, `airflow-init` creates it and runs the migration into it; afterwards the DAG grid starts empty (the metadata of an earlier, local-Postgres setup is not migrated — the old data volume `geo_e2e_postgres_data` is kept as a backup until you prune it).
+   ```bash
+   docker compose exec airflow-scheduler python -c "import os; from sqlalchemy import create_engine, text; e=create_engine(os.environ['AIRFLOW__DATABASE__SQL_ALCHEMY_CONN']); print(e.connect().execute(text('select current_schema()')).scalar())"
+   ```
 
-   > `./setup.sh` (and `setup.ps1`) also **write the five `SUPABASE_DB_*` values into `../GEO_ETL/.env` and `../GEO_API/.env`** — the sibling ETL and API projects read their JDBC/SQL credentials from those gitignored files, so you configure the credentials once, here, and never copy them between projects.
-7. **Check** — `docker compose --env-file .env config --quiet` renders the file and fails with the name of any missing key; `docker compose --env-file .env run --rm --no-deps airflow-cli python -c "import os; from sqlalchemy import create_engine, text; e=create_engine(os.environ['AIRFLOW__DATABASE__SQL_ALCHEMY_CONN']); print(e.connect().execute(text('select current_schema()')).scalar())"` prints `geo_airflow` when the connection and the schema are right.
+   It prints `geo_airflow` when the connection and the schema are right.
 
-A missing variable stops compose early with a message naming the key (`Set SUPABASE_DB_HOST in .env (run ./setup.sh)`). The credentials are secrets: `.env` and `.env.docker` are git-ignored and only `.env.example` (placeholders) is committed — the same rule as GEO_ETL's `.env`.
+A missing variable stops compose early with a message naming the key (`Set SUPABASE_DB_HOST in .env`). `.env` is git-ignored; only `.env.example` (placeholders) is committed. The legacy `.env.docker` name is still ignored by git but is not used by the Docker images (they write `.env`).
 
 ## Modifying the schedule
 

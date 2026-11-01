@@ -5,11 +5,11 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-_SEED_POOLS_PATH = Path(__file__).resolve().parents[1] / "docker" / "airflow" / "seed_pools.py"
+_SEED_POOLS_PATH = Path(__file__).resolve().parents[1] / "docker" / "geo_airflow_spark" / "seed_pools.py"
 
 
 def _load_seed_pools():
-    """Import docker/airflow/seed_pools.py by path (it is not part of a package)."""
+    """Import docker/geo_airflow_spark/seed_pools.py by path (it is not part of a package)."""
     spec = importlib.util.spec_from_file_location("seed_pools", _SEED_POOLS_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

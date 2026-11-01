@@ -6,11 +6,11 @@
 
 ```
 GEO_E2E/
-├── README.md                 # Overview, setup and quick start
-├── docker-compose.yaml       # Airflow stack (init, scheduler, API server, DAG processor → Supabase) + Spark cluster
-├── .env.example              # Template for the machine-specific .env (committed)
-├── .env                      # Machine-specific paths (written by ./setup.sh, not in git)
-├── setup.sh                  # Bootstrap: writes .env (+ login) from this checkout; in a container writes .env.docker
+├── README.md                 # Overview, Docker setup and quick start
+├── docker-compose.yaml       # three-image stack: Airflow + Spark, FastAPI, React
+├── .env.example              # Docker credentials template (committed)
+├── .env                      # Supabase/Airflow credentials (git-ignored)
+├── setup.sh                  # Bootstrap for host + image mode (GEO_DOCKER=1)
 ├── setup.ps1                 # Windows twin of setup.sh — same detection, same file names
 ├── setup.command             # macOS double-click entry point — thin wrapper that runs setup.sh
 ├── .gitignore                # Excludes .env, .env.docker, logs/, __pycache__, .tox, IDE files
@@ -25,12 +25,21 @@ GEO_E2E/
 ├── pyproject.toml            # Ruff rules, formatter style, mypy files and pytest options
 ├── tox.ini                   # lint / test / typecheck / format / warnings environments
 ├── docker/
-│   ├── airflow/
-│   │   ├── Dockerfile        # apache/airflow:3.3.2 + providers-standard, psutil, pydantic, conda symlink
-│   │   └── seed_pools.py     # seeds the Airflow pools from config.json (dag.pool_slots) on startup
-│   └── spark/
-│       ├── Dockerfile        # Custom Spark image (apache/spark:3.5.5 + JARs)
-│       └── jars/             # Hadoop AWS, PostgreSQL JDBC, spark-monitor (gitignored)
+│   ├── geo_airflow_spark/    # Airflow + Spark + Anaconda + GEO_E2E/GEO_Download/GEO_ETL
+│   │   ├── Dockerfile
+│   │   ├── environment/      # runtime-only geo_e2e_311 / geo_download_311 / geo_etl_311
+│   │   ├── jars/             # PostgreSQL JDBC + spark-monitor
+│   │   ├── create_schema.py  # geo_airflow schema (before the migration)
+│   │   ├── seed_pools.py     # dag.pool_slots pools (idempotent)
+│   │   ├── refresh-env.sh    # runtime .env from Compose credentials
+│   │   └── airflow-entrypoint.sh  # refresh, then Airflow's official entrypoint
+│   ├── geo_fastapi/          # GEO_API + geo_api_311
+│   │   ├── Dockerfile
+│   │   ├── environment.yml
+│   │   └── entrypoint.sh     # writes .env, starts uvicorn
+│   └── geo_react_app/        # Vite build stage + nginx runtime
+│       ├── Dockerfile
+│       └── nginx.conf
 ├── docs/                     # Extended documentation (this file lives here)
 └── test/                     # Unit tests
     ├── __init__.py
@@ -49,18 +58,31 @@ GEO_E2E/
 | `util.py` | `get_memory_info()` and `log_memory_usage()` — used as `on_success_callback` / `on_failure_callback` of every task |
 | `config.json` | Command templates for `DOWNLOAD`/`INGESTION`/`DATA_QUALITY`/`SINGLE_ETL`/`VIEW` (folder, script, conda env) |
 | `jobs.json` | Flat job list — one object per job (`name`, `job_type`, `next_jobs` as name references) — plus the `Union` job |
-| `docker-compose.yaml` | Airflow services (`network_mode: host`, UI on `8090`, metadata DB = Supabase Postgres from `.env`) plus the Spark cluster |
-| `setup.sh` | Writes the git-ignored `.env` once per checkout — `GEO_ROOT`/`GEO_DATA_DIR` from the clone's location, `CONDA_ROOT` from `conda info --base`, `AIRFLOW_UID` from `id -u`, the Airflow UI login (`--force` keeps the existing one) and the `SUPABASE_DB_*` credentials (re-used from an existing file or from a sibling `GEO_ETL/.env` / `GEO_API/.env`, then mirrored into both `../GEO_ETL/.env` and `../GEO_API/.env`); compose reads it via `--env-file .env` |
-| `docker/airflow/Dockerfile` | Extends `apache/airflow:3.3.2-python3.11` with `apache-airflow-providers-standard`, `psutil`, `pydantic` (pinned to the Airflow constraints) and a `conda` symlink to the host conda (bind-mounted at runtime) |
-| `docker/airflow/create_schema.py` | Creates the `geo_airflow` schema on Supabase — `airflow-init` runs it before `airflow db migrate`, so the migration's tables land in the schema the connection's `search_path` points at |
-| `docker/spark/Dockerfile` | Custom Spark image (`apache/spark:3.5.5` + Hadoop AWS, PostgreSQL JDBC and `spark-monitor` JARs) — `docker-compose.yaml` builds it from `./docker/spark` for the master and both workers |
+| `docker-compose.yaml` | Three images (`geo_airflow_spark`, `geo_fastapi`, `geo_react_app`), bridge network, named volumes; Airflow UI on 8090, Spark UI on 8083, API on 8000, app on 3000 |
+| `setup.sh` | Host mode writes the git-ignored `.env` (paths, login, Supabase credentials); `GEO_DOCKER=1` writes the same file with container paths (`/opt/geo`, `/opt/conda`) and reads credentials from the environment. Mirrors `SUPABASE_DB_*` into `../GEO_ETL/.env` and `../GEO_API/.env` |
+| `docker/geo_airflow_spark/Dockerfile` | Airflow 3.3.2 + Anaconda + the three conda envs + Spark 3.5.5 + runtime GEO_E2E/GEO_Download/GEO_ETL files under `/opt/geo` |
+| `docker/geo_airflow_spark/create_schema.py` | Creates the `geo_airflow` schema on Supabase — `airflow-init` runs it before `airflow db migrate`, so the migration's tables land in the schema the connection's `search_path` points at |
+| `docker/geo_airflow_spark/refresh-env.sh` | Re-runs `setup.sh` in image mode, injecting Compose-provided credentials into the in-image `.env` files |
+| `docker/geo_airflow_spark/airflow-entrypoint.sh` | Per-container wrapper: refresh `.env`, then exec Airflow's official `/entrypoint` |
+| `docker/geo_fastapi/Dockerfile` | Anaconda + `geo_api_311`, runtime GEO_API files under `/opt/geo/GEO_API`, uvicorn on 8000 |
+| `docker/geo_react_app/Dockerfile` | Node 20 build stage + nginx runtime; `VITE_API_BASE` baked at build time, port 3000 |
+
+## Container architecture
+
+| Image | Services | Key contents |
+|-------|----------|--------------|
+| `geo_airflow_spark` | `airflow-init`, `airflow-dag-processor`, `airflow-scheduler`, `airflow-api-server`, `airflow-dag-activate`, `geo-spark-master`, `geo-spark-worker-1/2` | Airflow 3.3.2, Spark 3.5.5, Anaconda + `geo_e2e_311`/`geo_download_311`/`geo_etl_311`, projects under `/opt/geo` |
+| `geo_fastapi` | `geo_fastapi` | GEO_API, Anaconda + `geo_api_311`, uvicorn on 8000 |
+| `geo_react_app` | `geo_react_app` | compiled Vite app, nginx on 80 (published as 3000) |
+
+Dependencies: Airflow → Supabase + Spark + `geo_data`; FastAPI → Supabase; React → FastAPI healthy; Spark workers → Spark master. Airflow and Spark share the `geo_data` named volume, so a CSV written by a download task is visible to every executor without host bind mounts.
 
 ## How it works
 
-1. The Airflow scheduler triggers the `geo_pipeline` DAG on the cron declared by the **scheduled jobs** in `jobs.json` (the nine `DOWNLOAD` roots, all `0 8 * * *` — `model.resolve_schedule()` requires them to agree, since Airflow schedules whole DAGs; `catchup`/`max_active_runs`/timezone come from the `dag` block of `config.json`). Downstreamed jobs (no `schedule`) start when their parent finishes. The DAG is created unpaused on first parse (`dags_are_paused_at_creation=false`), and the `download`/`etl` pools are seeded by `airflow-init` from `dag.pool_slots` (`docker/airflow/seed_pools.py`) on every `docker compose up`. The DAGs folder is the whole `GEO_E2E` directory (`AIRFLOW__CORE__DAGS_FOLDER` in `docker-compose.yaml`) and `.airflowignore` excludes everything else from the scan, so `geo_pipeline.py` is the only file parsed as a DAG. Airflow's metadata lives in **Supabase Postgres**: `.env` supplies the `SUPABASE_DB_*` credentials, `docker-compose.yaml` builds `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` from them with `sslmode=require` and `search_path=geo_airflow`, and `airflow-init` creates that schema (`docker/airflow/create_schema.py`) before running the migration — no local Postgres container is involved.
+1. The Airflow scheduler triggers the `geo_pipeline` DAG on the cron declared by the **scheduled jobs** in `jobs.json` (the nine `DOWNLOAD` roots, all `0 8 * * *` — `model.resolve_schedule()` requires them to agree, since Airflow schedules whole DAGs; `catchup`/`max_active_runs`/timezone come from the `dag` block of `config.json`). Downstreamed jobs (no `schedule`) start when their parent finishes. The DAG is created unpaused on first parse (`dags_are_paused_at_creation=false`), `airflow-dag-activate` unpauses an already-paused DAG, and the `download`/`etl` pools are seeded by `airflow-init` from `dag.pool_slots` (`docker/geo_airflow_spark/seed_pools.py`) on every `docker compose up`. The DAGs folder is `/opt/geo/GEO_E2E` (`AIRFLOW__CORE__DAGS_FOLDER`) and `.airflowignore` excludes everything else from the scan, so `geo_pipeline.py` is the only file parsed as a DAG. Airflow's metadata lives in **Supabase Postgres**: Compose supplies the `SUPABASE_DB_*` credentials (runtime, never in an image layer), builds `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` with `sslmode=require` and `search_path=geo_airflow`, and `airflow-init` creates that schema (`docker/geo_airflow_spark/create_schema.py`) before running the migration — no local Postgres container is involved.
 2. At DAG-parse time, `geo_pipeline.py` calls `model.build_task_specs()`, which loads every chain from `jobs.json` and flattens it into `TaskSpec`s — one per job, with the task id taken from the job's `task_id` field in the registry (`NIFC.download`, `NIFC.single_etl`, `NIFC_etl.data_quality`, `View.metrics_flood_vw`, …) and the shell command built from the `job` block of `config.json` — for `DOWNLOAD`: `cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py <source_name>`.
 3. `geo_pipeline.py` delegates the conversion to `geo_dag.GEO_DAG`: it groups the specs by `source_name` into ten `geo_dag.JobsSubDAG`s (the nine source chains in `jobs.json` order, then the union chain), every subDAG creates one `BashOperator` per spec (`cwd` = the GEO_E2E directory, so the `cd ..;cd GEO_*` commands resolve the sibling projects, pool by job type, trigger rule from the spec) and wires the dependencies **inside** itself; `GEO_DAG.to_airflow()` then wires the dependencies **between** subDAGs — the union fan-in and the verdict task's edges. Tasks with `next_jobs` use the default `all_success` trigger rule; the union root uses `all_done_min_one_success`, the verdict `all_done`.
-4. At run time the scheduler (LocalExecutor) executes each task as a subprocess inside the scheduler container: `conda` is on the image's `PATH` (symlink to the bind-mounted host conda), and the `geo_download_311` / `geo_etl_311` envs are found at their absolute host paths.
+4. At run time the scheduler (LocalExecutor) executes each task as a subprocess inside the scheduler container: `conda` is symlinked from the image's `/opt/conda`, the `geo_download_311` / `geo_etl_311` environments live at `/opt/conda/envs`, and `SPARK_MASTER_URL=spark://geo-spark-master:7078` makes GEO_ETL reach the Spark master by Compose service name.
 5. Concurrency is capped by pools: `DOWNLOAD` tasks go to the `download` pool (3 slots), every other job type to the `etl` pool (2 slots) — so at most 3 downloads and 2 Spark ETL jobs run at once.
 6. Each task's stdout/stderr is captured as the Airflow task log (viewable in the web UI). On success **and** failure the memory callback appends `NIFC.download Memory: X out of Y GiB (Z %) used`.
 7. If a task exits non-zero it is marked **failed**, and everything reachable through its `next_jobs` is **skipped** (`all_success` trigger rule) — the DAG semantics of the shipped `jobs.json`'s `is_next_skipped_if_error: true` (documentation only). Skipping is per branch: a failed plain-table `DATA_QUALITY` does not stop its sibling `SINGLE_ETL`.

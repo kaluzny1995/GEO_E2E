@@ -1,79 +1,99 @@
+# Self-contained GEO E2E stack — three images, no host conda, no host project bind mounts.
+#
+#   geo_airflow_spark  Airflow 3.3.2 + Spark 3.5.5 + Anaconda + GEO_E2E/GEO_Download/GEO_ETL
+#   geo_fastapi        GEO_API + Anaconda (geo_api_311)
+#   geo_react_app      compiled GEO_APP served by nginx
+#
+# Before `docker compose up`, set the five SUPABASE_DB_* values and optionally the Airflow
+# login in .env (see .env.example). Airflow defaults to airflow_admin / airflow_admin.
+# Rebuild after source changes with `docker compose build` or `docker compose up -d --build`.
+
+name: geo_e2e
+
+x-airflow-spark-image: &airflow-spark-image
+  image: geo_airflow_spark:latest
+
 x-airflow-common: &airflow-common
-  build:
-    context: .
-    dockerfile: docker/airflow/Dockerfile
-    args:
-      CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env (run ./setup.sh)}
-  image: geo_airflow:3.3.2
+  <<: *airflow-spark-image
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__CORE__DAGS_FOLDER: ${GEO_ROOT:?Set GEO_ROOT in .env (run ./setup.sh)}/GEO_E2E
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/geo/GEO_E2E
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    # Create DAGs unpaused on first parse — no manual unpause in the UI needed
+    # Create DAGs unpaused on first parse — no manual unpause in the UI needed.
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
-    # Supabase Postgres is the metadata DB (no local Postgres container). The five
-    # SUPABASE_DB_* values live in .env (git-ignored) — same variable names as the
-    # GEO_ETL project — see .env.example. The URL pins search_path to AIRFLOW_DB_SCHEMA so
-    # every Airflow table lands in the `geo_airflow` schema; airflow-init creates that schema
-    # (docker/airflow/create_schema.py) before the migration runs, otherwise Postgres would
-    # silently create the tables in the default schema instead. The password travels in
-    # PGPASSWORD (read by libpq) rather than inside the URL, so it needs no URL-encoding;
-    # `sslmode=require` because Supabase terminates TLS on the pooler.
+    # Supabase Postgres is the metadata DB. The SQLAlchemy URL pins search_path to
+    # AIRFLOW_DB_SCHEMA so every Airflow table lands in `geo_airflow`; airflow-init creates
+    # that schema before the migration. The password travels in PGPASSWORD (libpq), never
+    # in the URL, and sslmode=require because Supabase terminates TLS on the pooler.
     AIRFLOW_DB_SCHEMA: ${AIRFLOW_DB_SCHEMA:-geo_airflow}
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${SUPABASE_DB_USER:?Set SUPABASE_DB_USER in .env (run ./setup.sh)}@${SUPABASE_DB_HOST:?Set SUPABASE_DB_HOST in .env (run ./setup.sh)}:${SUPABASE_DB_PORT:?Set SUPABASE_DB_PORT in .env (run ./setup.sh)}/${SUPABASE_DB_NAME:?Set SUPABASE_DB_NAME in .env (run ./setup.sh)}?sslmode=require&options=-c%20search_path%3D${AIRFLOW_DB_SCHEMA:-geo_airflow}
-    PGPASSWORD: ${SUPABASE_DB_PASSWORD:?Set SUPABASE_DB_PASSWORD in .env (run ./setup.sh)}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${SUPABASE_DB_USER:?Set SUPABASE_DB_USER in .env}@${SUPABASE_DB_HOST:?Set SUPABASE_DB_HOST in .env}:${SUPABASE_DB_PORT:?Set SUPABASE_DB_PORT in .env}/${SUPABASE_DB_NAME:?Set SUPABASE_DB_NAME in .env}?sslmode=require&options=-c%20search_path%3D${AIRFLOW_DB_SCHEMA:-geo_airflow}
+    PGPASSWORD: ${SUPABASE_DB_PASSWORD:?Set SUPABASE_DB_PASSWORD in .env}
+    # Also passed to the task subprocesses: GEO_ETL/GEO_API read the same five names.
+    SUPABASE_DB_USER: ${SUPABASE_DB_USER:?Set SUPABASE_DB_USER in .env}
+    SUPABASE_DB_PASSWORD: ${SUPABASE_DB_PASSWORD:?Set SUPABASE_DB_PASSWORD in .env}
+    SUPABASE_DB_HOST: ${SUPABASE_DB_HOST:?Set SUPABASE_DB_HOST in .env}
+    SUPABASE_DB_PORT: ${SUPABASE_DB_PORT:?Set SUPABASE_DB_PORT in .env}
+    SUPABASE_DB_NAME: ${SUPABASE_DB_NAME:?Set SUPABASE_DB_NAME in .env}
+    AIRFLOW__API__HOST: 0.0.0.0
     AIRFLOW__API__PORT: "8090"
-    AIRFLOW__API__BASE_URL: http://localhost:8090
-    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://localhost:8090/execution/
+    AIRFLOW__API__BASE_URL: http://localhost:${AIRFLOW_HOST_PORT:-8090}
+    # Internal execution API address: scheduler/task supervisor reach the API server by
+    # its Compose service name, not localhost.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8090/execution/
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-geo_e2e_dev_jwt_secret}
     AIRFLOW__API_AUTH__JWT_ISSUER: airflow
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_HOME: /opt/airflow
-    # Deliberately NO HOME override: the image installs Airflow in the /home/airflow/.local
-    # venv, and the `airflow` console script (base-python shebang) resolves its package via
-    # the HOME user-site — HOME=/opt/airflow points it at a nonexistent /opt/airflow/.local,
-    # so every *restarted* service dies on the entrypoint's `airflow db check`
-    # (the entrypoint only fixes HOME itself on a container's first start, when its uid is
-    # still missing from /etc/passwd). AIRFLOW_HOME alone pins the data/logs to the volume.
-    CONDA_ROOT: ${CONDA_ROOT:?Set CONDA_ROOT in .env (run ./setup.sh)}
+    # Do not set HOME here: the Airflow console script resolves its packages through the
+    # image's /home/airflow user-site. AIRFLOW_HOME alone pins data/logs to the volume.
+    CONDA_ROOT: /opt/conda
+    GEO_DOCKER: "1"
+    # GEO_ETL's Spark driver connects to the master by Compose DNS name.
+    SPARK_MASTER_URL: spark://geo-spark-master:7078
   volumes:
-    # Mounted at the same absolute path inside the container so conda env shebangs
-    # and sibling-project paths keep resolving — the values live only in .env (not in git)
-    - ${GEO_ROOT:?Set GEO_ROOT in .env (run ./setup.sh)}:${GEO_ROOT:?Set GEO_ROOT in .env (run ./setup.sh)}
-    - ${CONDA_ROOT:?Set CONDA_ROOT in .env (run ./setup.sh)}:${CONDA_ROOT:?Set CONDA_ROOT in .env (run ./setup.sh)}
     - airflow_data:/opt/airflow
-  user: "${AIRFLOW_UID:-50000}:0"
-  network_mode: host
+    - geo_data:/opt/geo/GEO_Download/data
+  # Refresh this container's in-image .env files from Compose, then run Airflow.
+  entrypoint: ["/opt/geo/bin/airflow-entrypoint.sh"]
+  user: "50000:0"
+  networks:
+    - geo_network
 
 services:
+  # airflow-init is the builder for the shared geo_airflow_spark image. The other Airflow
+  # and Spark services reference the same image (one build, not one per service).
   airflow-init:
     <<: *airflow-common
+    build:
+      context: ..
+      dockerfile: GEO_E2E/docker/geo_airflow_spark/Dockerfile
     entrypoint: /bin/bash
     command:
       - -c
       - |
+        set -euo pipefail
         mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins /opt/airflow/config
-        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
-        # Create the Supabase schema first — the connection pins search_path to it, and Postgres
-        # has no DDL for "create if missing" inside Airflow's own migration. Idempotent.
-        python "${GEO_ROOT}/GEO_E2E/docker/airflow/create_schema.py"
+        chown -R "50000:0" /opt/airflow/
+        # Write .env from the Compose-provided credentials (no secrets in image layers).
+        /opt/geo/bin/refresh-env.sh
+        # Create the Supabase schema first — the connection pins search_path to it, and
+        # Postgres has no DDL for "create if missing" inside Airflow's own migration.
+        python /opt/geo/GEO_E2E/docker/airflow/create_schema.py
         /entrypoint airflow version
-        # Seed the concurrency pools from config.json (`dag.pool_slots`; idempotent — re-running
-        # docker compose up resets them to the configured slot counts). The script invokes the
-        # CLI through /entrypoint; skip the env-triggered migrate/user steps on those extra calls
-        # — they already ran above.
+        # Seed the concurrency pools from config.json (`dag.pool_slots`; idempotent).
         unset _AIRFLOW_DB_MIGRATE _AIRFLOW_WWW_USER_CREATE
-        python "${GEO_ROOT}/GEO_E2E/docker/airflow/seed_pools.py"
-        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
+        python /opt/geo/GEO_E2E/docker/airflow/seed_pools.py
+        chown -R "50000:0" /opt/airflow/
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: "true"
       _AIRFLOW_WWW_USER_CREATE: "true"
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:?Set _AIRFLOW_WWW_USER_USERNAME in .env (run ./setup.sh)}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?Set _AIRFLOW_WWW_USER_PASSWORD in .env (run ./setup.sh)}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow_admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow_admin}
     user: "0:0"
+    restart: "no"
 
   airflow-dag-processor:
     <<: *airflow-common
@@ -81,24 +101,29 @@ services:
       airflow-init:
         condition: service_completed_successfully
     command: dag-processor
-    restart: always
+    restart: unless-stopped
 
   airflow-scheduler:
     <<: *airflow-common
     depends_on:
       airflow-init:
         condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+      geo-spark-master:
+        condition: service_healthy
+      geo-spark-worker-1:
+        condition: service_started
+      geo-spark-worker-2:
+        condition: service_started
     command: scheduler
-    restart: always
-    # `python -m airflow` rather than the `airflow` console script: healthchecks bypass
-    # /entrypoint, so use the interpreter that resolves the image's /home/airflow/.local venv
-    # directly via pyvenv.cfg — independent of whatever HOME the healthcheck environment has.
     healthcheck:
       test: ["CMD-SHELL", "python -m airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
 
   airflow-api-server:
     <<: *airflow-common
@@ -106,13 +131,39 @@ services:
       airflow-init:
         condition: service_completed_successfully
     command: api-server
+    ports:
+      - "${AIRFLOW_HOST_PORT:-8090}:8090"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8090/api/v2/monitor/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
-    restart: always
+    restart: unless-stopped
+
+  # One-shot: make sure a metadata DB that already contains geo_pipeline leaves it active
+  # after startup. On a fresh Supabase schema `dags_are_paused_at_creation=false` already
+  # creates it unpaused; this also repairs an earlier manually-paused DAG.
+  airflow-dag-activate:
+    <<: *airflow-common
+    depends_on:
+      airflow-dag-processor:
+        condition: service_started
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -euo pipefail
+        for _ in $(seq 1 60); do
+            if airflow dags unpause geo_pipeline 2>/dev/null; then
+                echo "geo_pipeline is active"
+                exit 0
+            fi
+            sleep 5
+        done
+        echo "geo_pipeline was not discovered within 5 minutes" >&2
+        exit 1
+    restart: "no"
 
   airflow-cli:
     <<: *airflow-common
@@ -120,63 +171,127 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-    command:
-      - bash
-      - -c
-      - airflow
+    # `docker compose run --rm airflow-cli dags list` -> `airflow dags list`
+    entrypoint: ["airflow"]
+    command: ["--help"]
 
-  geo_spark_master:
-    build: ./docker/spark
-    container_name: geo_spark_master
-    hostname: geo-spark-master
-    ports:
-      - "8083:8083"
-      - "7078:7078"
+  geo-spark-master:
+    <<: *airflow-spark-image
+    user: "50000:0"
     environment:
       SPARK_MASTER_HOST: geo-spark-master
-      SPARK_MASTER_WEBUI_PORT: "8083"
       SPARK_MASTER_PORT: "7078"
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      SPARK_MASTER_WEBUI_PORT: "8083"
+    # Bypass Airflow's /entrypoint: this image also hosts the Spark master.
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command: ["org.apache.spark.deploy.master.Master"]
+    ports:
+      - "${SPARK_MASTER_PORT_HOST:-7078}:7078"
+      - "${SPARK_MASTER_UI_HOST_PORT:-8083}:8083"
+    volumes:
+      - geo_data:/opt/geo/GEO_Download/data:ro
     networks:
       - geo_network
-    volumes:
-      - ${GEO_DATA_DIR}:${GEO_DATA_DIR}:ro
-    restart: always
+    healthcheck:
+      # The master binds SPARK_MASTER_HOST (geo-spark-master), not loopback.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/geo-spark-master/7078'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
 
-  geo_spark_worker_1:
-    build: ./docker/spark
-    container_name: geo_spark_worker_1
+  geo-spark-worker-1:
+    <<: *airflow-spark-image
+    user: "50000:0"
     environment:
       SPARK_WORKER_MEMORY: 2g
       SPARK_WORKER_CORES: 2
-      SPARK_WORKER_WEBUI_PORT: "8084"
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://geo-spark-master:7078
+      SPARK_WORKER_WEBUI_PORT: "8081"
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command: ["org.apache.spark.deploy.worker.Worker", "spark://geo-spark-master:7078"]
     depends_on:
-      - geo_spark_master
+      geo-spark-master:
+        condition: service_healthy
+    ports:
+      - "${SPARK_WORKER_1_UI_HOST_PORT:-8084}:8081"
+    volumes:
+      - geo_data:/opt/geo/GEO_Download/data:ro
     networks:
       - geo_network
-    volumes:
-      - ${GEO_DATA_DIR}:${GEO_DATA_DIR}:ro
-    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
 
-  geo_spark_worker_2:
-    build: ./docker/spark
-    container_name: geo_spark_worker_2
+  geo-spark-worker-2:
+    <<: *airflow-spark-image
+    user: "50000:0"
     environment:
       SPARK_WORKER_MEMORY: 2g
       SPARK_WORKER_CORES: 2
-      SPARK_WORKER_WEBUI_PORT: "8085"
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://geo-spark-master:7078
+      SPARK_WORKER_WEBUI_PORT: "8081"
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command: ["org.apache.spark.deploy.worker.Worker", "spark://geo-spark-master:7078"]
     depends_on:
-      - geo_spark_master
+      geo-spark-master:
+        condition: service_healthy
+    ports:
+      - "${SPARK_WORKER_2_UI_HOST_PORT:-8085}:8081"
+    volumes:
+      - geo_data:/opt/geo/GEO_Download/data:ro
     networks:
       - geo_network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  geo_fastapi:
+    image: geo_fastapi:latest
+    build:
+      context: ..
+      dockerfile: GEO_E2E/docker/geo_fastapi/Dockerfile
+    environment:
+      SUPABASE_DB_USER: ${SUPABASE_DB_USER:?Set SUPABASE_DB_USER in .env}
+      SUPABASE_DB_PASSWORD: ${SUPABASE_DB_PASSWORD:?Set SUPABASE_DB_PASSWORD in .env}
+      SUPABASE_DB_HOST: ${SUPABASE_DB_HOST:?Set SUPABASE_DB_HOST in .env}
+      SUPABASE_DB_PORT: ${SUPABASE_DB_PORT:?Set SUPABASE_DB_PORT in .env}
+      SUPABASE_DB_NAME: ${SUPABASE_DB_NAME:?Set SUPABASE_DB_NAME in .env}
+    ports:
+      - "${GEO_API_HOST_PORT:-8000}:8000"
     volumes:
-      - ${GEO_DATA_DIR}:${GEO_DATA_DIR}:ro
-    restart: always
+      - geo_api_logs:/opt/geo/GEO_API/logs
+    networks:
+      - geo_network
+    restart: unless-stopped
+
+  geo_react_app:
+    image: geo_react_app:latest
+    build:
+      context: ..
+      dockerfile: GEO_E2E/docker/geo_react_app/Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    depends_on:
+      geo_fastapi:
+        condition: service_healthy
+    ports:
+      - "${GEO_APP_HOST_PORT:-3000}:80"
+    networks:
+      - geo_network
+    restart: unless-stopped
 
 volumes:
   airflow_data:
+  geo_data:
+  geo_api_logs:
 
 networks:
   geo_network:

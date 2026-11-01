@@ -14,13 +14,13 @@ One task decides how the run itself is rated: the synthesized **verdict task** (
 
 Each data source's jobs live in the flat `jobs.json` registry (one object per job; `next_jobs` references the dependent jobs by `name`, same pattern as E2EReddit). `model.build_task_specs()` validates the registry and resolves it into Airflow task specs, which `geo_dag.GEO_DAG` groups into ten code-level subDAGs — one `geo_dag.JobsSubDAG` per source chain plus the union chain — and renders into `BashOperator`s of the single mega-DAG (`geo_pipeline.py` is only its `@dag` wrapper), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
 
-The system runs as Docker Compose services:
+The system runs as three Docker images:
 
-1. **Airflow Scheduler** — triggers the `geo_pipeline` DAG daily at 08:00 (Europe/Warsaw) and runs its tasks (LocalExecutor).
-2. **Airflow API server + UI** — web UI at http://localhost:8090 (login: `airflow_admin` / `airflow_admin` from `.env`) for monitoring, manually triggering and re-running jobs.
-3. **Airflow DAG processor** — parses `geo_pipeline.py` into tasks.
+1. **`geo_airflow_spark`** — the Airflow scheduler, API server/UI and DAG processor, plus the Spark standalone master and two workers. It contains Anaconda with the `geo_e2e_311`, `geo_download_311` and `geo_etl_311` environments and the runtime files of GEO_E2E, GEO_Download and GEO_ETL.
+2. **`geo_fastapi`** — GEO_API served by uvicorn, with Anaconda and the `geo_api_311` environment.
+3. **`geo_react_app`** — the compiled React dashboard served by nginx.
 
-Airflow's metadata lives in the **Supabase** Postgres database — the `geo_airflow` schema of the project configured in `.env` (no local database container); concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
+The images are self-contained: no host conda or host project bind mounts. Airflow's metadata lives in the **Supabase** Postgres database — the `geo_airflow` schema of the project configured in `.env` (no local database container); concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
 
 ## Features
 
@@ -65,20 +65,21 @@ flowchart TD
 
 ## Tech Stack
 
-| Component        | Technology                                    |
-|------------------|-----------------------------------------------|
-| Language         | Python 3.11                                   |
-| Orchestrator     | Apache Airflow 3.3.2 (LocalExecutor)          |
-| Web UI           | Airflow API server on http://localhost:8090   |
-| Metadata DB      | Supabase Postgres (`geo_airflow` schema)      |
-| Data Validation  | Pydantic >= 2.0.0                             |
-| Memory Monitor   | psutil >= 5.9.0                               |
-| Testing          | pytest >= 7.0.0                               |
-| Linting/Format   | ruff >= 0.6 (lint + format + import sort)     |
-| Check runner     | tox >= 4.0 (isolated lint/test/typecheck)     |
-| Type checking    | mypy >= 1.10 (run via `tox -e typecheck`)     |
-| Environment      | Conda                                         |
-| Cluster          | Docker Compose (Airflow + Spark 3.5.5)        |
+| Component        | Technology                                       |
+|------------------|--------------------------------------------------|
+| Language         | Python 3.11                                      |
+| Orchestrator     | Apache Airflow 3.3.2 (LocalExecutor)             |
+| Web UI           | Airflow API server on http://localhost:8090      |
+| Metadata DB      | Supabase Postgres (`geo_airflow` schema)         |
+| Data Validation  | Pydantic >= 2.0.0                                |
+| Memory Monitor   | psutil >= 5.9.0                                  |
+| Testing          | pytest >= 7.0.0 (local development only)         |
+| Linting/Format   | ruff >= 0.6 (local development only)             |
+| Check runner     | tox >= 4.0 (local development only)              |
+| Type checking    | mypy >= 1.10 (local development only)            |
+| Environment      | Anaconda + conda (`geo_*_311` envs in the image) |
+| Cluster          | Docker Compose: Airflow + Spark 3.5.5            |
+| Frontend         | React 18 + Vite, served by nginx on port 3000    |
 
 ## Documentation
 
@@ -91,178 +92,245 @@ flowchart TD
 
 ## Prerequisites
 
-- **Conda** — for environment management
-- **Docker** — for the Airflow stack and the Spark cluster
-- **GEO_Download** — must be a sibling directory (i.e. `../GEO_Download/`) with the `geo_download_311` conda env created, since downloads run there
-- **GEO_ETL** — must be a sibling directory (i.e. `../GEO_ETL/`) with the `geo_etl_311` conda env created, since chained ingestion, single-ETL, data-quality and view runs happen there
-- **Spark cluster** — must be up (`docker compose --env-file .env up -d geo_spark_master geo_spark_worker_1 geo_spark_worker_2`) before ingestion, single-ETL, data-quality and view jobs can connect
+- **Docker Engine 24+ and Docker Compose v2** — the whole stack runs in containers.
+- **A Supabase project** — its PostgreSQL credentials are used by Airflow's metadata DB, GEO_ETL and GEO_API.
+- **No host conda, host project paths or sibling conda environments are required for the Dockerized run.**
+- Host conda + Node.js are only needed for the optional local development workflow below.
 
-## Setup
+## Dockerizing the solution (recommended)
 
-### 1. Create the Conda environments
+### 1. Configure credentials — mandatory before `docker compose up`
 
-This project's own environment (ruff, tox, mypy and the pinned Airflow packages come from the `pip:` section):
-
-```bash
-conda env create -f environment.yml
-```
-
-For an environment that already exists:
+Create the git-ignored `.env` from the template:
 
 ```bash
-conda env update -f environment.yml
+cp .env.example .env
 ```
 
-The download and ingestion steps each run in their own env (see `job.*.conda_env` in `config.json` — the data-quality, single-ETL and view steps reuse `geo_etl_311`), so create those too if they don't exist yet:
+Then fill in the five **Supabase** values:
 
-```bash
-conda env create -f ../GEO_Download/environment.yml   # geo_download_311
-conda env create -f ../GEO_ETL/environment.yml        # geo_etl_311
-```
-
-### 2. Configure environment variables (mandatory)
-
-**Mandatory before the first `docker compose` command** — run the bootstrap script once per checkout; it derives the machine paths from this clone and writes the git-ignored `.env`:
-
-```bash
-./setup.sh            # --force to regenerate, --help for the flags
-```
-
-It prompts for the Airflow UI login (defaults `airflow_admin` / `airflow_admin` when stdin is not a TTY) and echoes the detected `GEO_ROOT`, `CONDA_ROOT`, `AIRFLOW_UID` and `SUPABASE_DB_*` host. The Supabase credentials are never prompted — you set them once in `.env` (a value already present there or in a sibling `../GEO_ETL/.env` / `../GEO_API/.env` is re-used), and the script then **mirrors the five `SUPABASE_DB_*` values into the sibling `../GEO_ETL/.env` and `../GEO_API/.env`** as well, so every project always runs with the same credentials; fill them by hand only if no file has them (walkthrough below). Run inside a Docker container it is non-interactive and writes `.env.docker` instead of `.env`. On macOS double-click `setup.command` (or run `./setup.command`) — it just runs `setup.sh`; after a ZIP download re-grant the exec bits with `chmod +x setup.command setup.sh`. On Windows run `.\setup.ps1` instead — same detection, same file names, same mirroring into GEO_ETL and GEO_API (use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` if execution is blocked). Manual fallback: `cp .env.example .env` and adjust the values.
-
-`.env` defines the machine-specific paths, uid, the Airflow UI login and the Supabase credentials — **the only place where your real values live** (`.env` is git-ignored; the compose file and the rest of the repo contain only variable references, no private paths or credentials). Compose auto-loads `.env` from the project root, but every command below passes `--env-file .env` explicitly so the file used is unambiguous:
-
-```
-GEO_DATA_DIR=<GEO_ROOT>/GEO_Download/data
-GEO_ROOT=<parent dir of the sibling projects>
-CONDA_ROOT=<conda base dir, e.g. $(conda info --base)>
-AIRFLOW_UID=$(id -u)
-_AIRFLOW_WWW_USER_USERNAME=<airflow_username>
-_AIRFLOW_WWW_USER_PASSWORD=<airflow_password>
+```env
 SUPABASE_DB_USER=postgres.<project-ref>
 SUPABASE_DB_PASSWORD=<supabase_db_password>
 SUPABASE_DB_HOST=<pooler host>
 SUPABASE_DB_PORT=6543
 SUPABASE_DB_NAME=postgres
-AIRFLOW_DB_SCHEMA=geo_airflow
 ```
 
-> **Important:** `docker compose --env-file .env` refuses to start with a clear error when `GEO_ROOT`, `CONDA_ROOT`, the two `_AIRFLOW_WWW_USER_*` credentials or any `SUPABASE_DB_*` value are missing — all are required: the sibling projects and conda are bind-mounted **at their host paths** inside the containers so that `conda run -n <env>` (absolute env shebangs) and the `cd ..;cd GEO_*` commands keep resolving, `airflow-init` creates the web UI admin user from the credentials, and the `SUPABASE_DB_*` values build the metadata-DB connection string.
+Airflow has usable defaults and does **not** need to be configured unless you want a different login:
 
-**Where every value comes from** (fresh clone from GitHub, no sibling `GEO_ETL` checkout):
+```env
+_AIRFLOW_WWW_USER_USERNAME=airflow_admin
+_AIRFLOW_WWW_USER_PASSWORD=airflow_admin
+```
 
-1. `GEO_ROOT`, `GEO_DATA_DIR`, `CONDA_ROOT`, `AIRFLOW_UID` — **nothing to set by hand**: `./setup.sh` derives all four from this checkout (`id -u`, `conda info --base`, the parent dir of the clone); only a missing conda is prompted.
-2. `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` — prompted (defaults `airflow_admin` / `airflow_admin`); this is the login of the Airflow web UI.
-3. `SUPABASE_DB_USER`, `SUPABASE_DB_HOST`, `SUPABASE_DB_PORT`, `SUPABASE_DB_NAME` — from the [Supabase dashboard](https://supabase.com/dashboard): open the project → **Connect** → *Connection pooling* → **Transaction pooler**, then copy **Host**, **Port** (`6543`), **Database** (`postgres`) and **User** (`postgres.<project-ref>`).
-4. `SUPABASE_DB_PASSWORD` — **never shown in the dashboard**: use the one saved when the project was created, or **Project Settings → Database → Generate password** (this immediately invalidates the old password — update every other client, e.g. GEO_ETL's and GEO_API's `.env`, at the same time).
-5. `AIRFLOW_DB_SCHEMA` — leave `geo_airflow`; `airflow-init` creates that schema on first start, so every Airflow table lands there.
+`./setup.sh` can also generate `.env` and imports existing Supabase credentials from `../GEO_ETL/.env` or `../GEO_API/.env` when present. Manual `cp .env.example .env` remains the simplest path for a fresh Docker-only checkout. On macOS use `./setup.command`; on Windows use `.\setup.ps1`.
 
-> **Setup lives here.** `./setup.sh` writes the five `SUPABASE_DB_*` values into **all three files** — `.env` (Airflow's metadata DB), the sibling `../GEO_ETL/.env` (the ETL's JDBC writes) and `../GEO_API/.env` (the API's SQL) — re-using whatever any of them already contains, so an existing GEO_ETL or GEO_API setup is imported automatically and neither sibling needs its own credential setup. Full walkthrough, URL anatomy and troubleshooting: [Configuration → Supabase metadata DB](docs/configuration.md#supabase-metadata-db-env).
+> **Security:** the Supabase credentials are injected into the containers at **runtime** from the Compose `environment:` section. Every long-running Airflow service (scheduler, API server, DAG processor) refreshes its own in-image `.env` through `airflow-entrypoint.sh`; `airflow-init` does the same before the migration, and the FastAPI entrypoint writes `GEO_API/.env`. No credential is ever baked into an image layer. `.env` is git-ignored.
 
-### 3. Start services with Docker Compose
+`docker compose` loads `.env` automatically from this directory. It fails before starting with a message naming any missing required Supabase variable.
+
+Where the values come from:
+
+1. `SUPABASE_DB_USER`, `SUPABASE_DB_HOST`, `SUPABASE_DB_PORT`, `SUPABASE_DB_NAME` — [Supabase dashboard](https://supabase.com/dashboard) → project → **Connect** → *Connection pooling* → **Transaction pooler**.
+2. `SUPABASE_DB_PASSWORD` — the password saved at project creation, or **Project Settings → Database → Generate password** (rotation invalidates the old one immediately).
+3. `AIRFLOW_DB_SCHEMA` — leave `geo_airflow`; `airflow-init` creates it before the migration.
+4. `VITE_API_BASE` — optional; the API URL compiled into the React app. Keep `http://localhost:8000` when the browser runs on the Docker host.
+
+Full walkthrough and URL anatomy: [Configuration → Supabase metadata DB](docs/configuration.md#supabase-metadata-db-env).
+
+### 2. Build and start the stack
 
 ```bash
-docker compose --env-file .env up -d --build
+docker compose up -d --build
 ```
 
-This starts:
+The first build is long because Anaconda and the `geo_*_311` environments are installed into the images. Later rebuilds reuse the Docker layer cache.
 
 | Service | Ports | Purpose |
 |---------|-------|---------|
-| `airflow-init` | – | One-shot: schema creation + DB migration, admin user creation (exits 0) |
-| `airflow-dag-processor` | – | Parses `geo_pipeline.py` |
-| `airflow-scheduler` | – | Triggers the DAG and runs its tasks (LocalExecutor) |
-| `airflow-api-server` | 8090 | Airflow REST API + web UI |
-| Spark Master | 7078, 8083 | Spark cluster master |
-| Spark Worker 1 | – | Spark worker (2 cores, 2g RAM); its web UI (8084) is container-internal only |
-| Spark Worker 2 | – | Spark worker (2 cores, 2g RAM); its web UI (8085) is container-internal only |
+| `airflow-init` | – | One-shot: refresh `.env`, create the Supabase schema, migrate the metadata DB, create the admin user, seed pools |
+| `airflow-dag-processor` | – | Parses `geo_pipeline.py` into tasks |
+| `airflow-scheduler` | – | Triggers the DAG and runs its tasks (LocalExecutor); waits for Spark |
+| `airflow-api-server` | **8090** | Airflow REST API + web UI |
+| `airflow-dag-activate` | – | One-shot: ensures `geo_pipeline` is unpaused after startup |
+| `geo-spark-master` | **7078**, **8083** | Spark master RPC + web UI |
+| `geo-spark-worker-1` | **8084** | Spark worker (2 cores, 2g RAM) |
+| `geo-spark-worker-2` | **8085** | Spark worker (2 cores, 2g RAM) |
+| `geo_fastapi` | **8000** | GEO_API (Swagger UI at `/docs`) |
+| `geo_react_app` | **3000** | React dashboard served by nginx |
 
-**Airflow UI:** http://localhost:8090 (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env`)
-**Spark Web UI:** http://localhost:8083
+**Airflow UI:** http://localhost:8090 — default login `airflow_admin` / `airflow_admin` (from `_AIRFLOW_WWW_USER_*`).
+**Spark UI:** http://localhost:8083 — worker UIs at http://localhost:8084 and http://localhost:8085.
+**GEO_API:** http://localhost:8000 — health at `/health`, Swagger at `/docs`.
+**GEO_APP:** http://localhost:3000.
 
-> The Airflow containers use `network_mode: host`, so task subprocesses reach the Spark master at `spark://localhost:7078` (the address in `../GEO_ETL/config.json`) and your host conda envs via their bind-mounted absolute paths. Airflow's metadata DB is the **Supabase** Postgres in `.env`: the containers reach it over the host network with TLS (`sslmode=require`), and every connection pins `search_path` to the `geo_airflow` schema that `airflow-init` creates on first start — there is no local Postgres container anymore (the old one's data volume `geo_e2e_postgres_data` is kept as a backup until you prune it).
+If a host port is already in use, override it in `.env` without changing the container port:
+`AIRFLOW_HOST_PORT`, `SPARK_MASTER_PORT_HOST`, `SPARK_MASTER_UI_HOST_PORT`,
+`SPARK_WORKER_1_UI_HOST_PORT`, `SPARK_WORKER_2_UI_HOST_PORT`, `GEO_API_HOST_PORT`,
+`GEO_APP_HOST_PORT` (see `.env.example`). Remember to update `VITE_API_BASE` and rebuild
+`geo_react_app` when the API host port changes.
 
-### 4. Nothing else to configure — pools and unpausing are automatic
+### 3. Images and container dependencies
 
-Two one-time UI steps are automated:
+| Image | Contents | Published ports | Dockerfile |
+|-------|----------|-----------------|------------|
+| `geo_airflow_spark` | Airflow 3.3.2, Spark 3.5.5, Anaconda + `geo_e2e_311` / `geo_download_311` / `geo_etl_311`, GEO_E2E + GEO_Download + GEO_ETL under `/opt/geo` | 8090, 7078, 8083, 8084, 8085 | `docker/geo_airflow_spark/Dockerfile` |
+| `geo_fastapi` | GEO_API under `/opt/geo/GEO_API`, Anaconda + `geo_api_311` | 8000 | `docker/geo_fastapi/Dockerfile` |
+| `geo_react_app` | compiled Vite `dist` served by nginx (no source or test tooling) | 3000 | `docker/geo_react_app/Dockerfile` |
 
-- **Pools** — `airflow-init` seeds them on every start (idempotent): `download` = 3 slots, `etl` = 2 slots.
-- **Unpausing** — `dags_are_paused_at_creation=false`, so `geo_pipeline` is created **unpaused** on first parse and runs daily at 08:00 (Europe/Warsaw).
+Container dependencies:
 
-Verify in the UI at http://localhost:8090 → **DAGs** (the toggle is on) or via `docker compose --env-file .env run --rm airflow-cli pools list` / `dags list`. You can also trigger a run manually via **Trigger DAG**.
+- `airflow-init`, `airflow-scheduler`, `airflow-dag-processor` and `airflow-api-server` → **Supabase** (metadata DB).
+- `airflow-scheduler` → `airflow-init` completed + Spark master healthy + both workers started.
+- Spark workers → Spark master.
+- Airflow + Spark → the shared `geo_data` volume (`/opt/geo/GEO_Download/data`); Airflow downloads CSV files, Spark executors read them.
+- `geo_fastapi` → **Supabase** (read-only queries).
+- `geo_react_app` → `geo_fastapi` healthy. The browser then calls the API at `VITE_API_BASE` (default `http://localhost:8000`).
 
-### 5. Verify directory structure
+### 4. Rebuilding after repository changes
 
-All five projects live as siblings under the same parent directory (`GeographicData/`). GEO_E2E, GEO_ETL and GEO_API expect their siblings at `../<name>/`, and `./setup.sh` mirrors the Supabase credentials into `../GEO_ETL/.env` and `../GEO_API/.env`:
+The images copy the source at build time and use **no source bind mounts**, so every repository change is picked up by a rebuild:
 
+```bash
+docker compose build                 # rebuild every image whose inputs changed
+docker compose up -d                 # recreate the containers on the new images
 ```
+
+Or in one command:
+
+```bash
+docker compose up -d --build
+```
+
+Individual images:
+
+```bash
+docker compose build airflow-init   # builds geo_airflow_spark (GEO_E2E/GEO_Download/GEO_ETL)
+docker compose build geo_fastapi    # builds geo_fastapi (GEO_API)
+docker compose build geo_react_app  # builds geo_react_app (GEO_APP)
+docker compose up -d
+```
+
+`airflow-init` is the Compose service that owns the shared `geo_airflow_spark` build; the scheduler, API server, DAG processor and Spark services reference the same image.
+
+- `docker compose restart` **does not** rebuild an image; use `build` first.
+- `docker compose build --no-cache <service>` forces fresh base-image and package resolution.
+- The React API URL is inlined by Vite, so changing `VITE_API_BASE` also requires rebuilding `geo_react_app`.
+- Base images are pinned to Airflow 3.3.2, Spark 3.5.5, Anaconda 2024.10-1, Node 20 and nginx 1.27.
+
+### 5. Data, logs and volumes
+
+| Volume | Mount | Persists |
+|--------|-------|----------|
+| `geo_data` | `/opt/geo/GEO_Download/data` in Airflow + Spark containers | downloaded CSV files and reference lookups |
+| `airflow_data` | `/opt/airflow` | Airflow logs and runtime data |
+| `geo_api_logs` | `/opt/geo/GEO_API/logs` | per-endpoint API logs |
+
+The `geo_data` volume is seeded from the image's `GEO_Download/data` directory on first use and then survives rebuilds and `docker compose down`. `docker compose down -v` deletes all three volumes (and the data).
+
+### 6. Pools and schedule are automatic
+
+- `airflow-init` seeds the `download` (3 slots) and `etl` (2 slots) pools on every start.
+- `dags_are_paused_at_creation=false` creates `geo_pipeline` unpaused; `airflow-dag-activate` also repairs an already-paused DAG after startup.
+- The DAG runs daily at **08:00 Europe/Warsaw**, defined by the scheduled jobs in `jobs.json`.
+
+Verify:
+
+```bash
+docker compose run --rm airflow-cli pools list
+docker compose run --rm airflow-cli dags list
+```
+
+### 7. Local development without Docker (optional)
+
+Host conda is only needed for running the DAG code, tests or tooling outside containers:
+
+```bash
+conda env create -f environment.yml
+conda env create -f ../GEO_Download/environment.yml   # geo_download_311
+conda env create -f ../GEO_ETL/environment.yml        # geo_etl_311
+./setup.sh                                            # writes host paths + credentials into .env
+```
+
+The extra `GEO_ROOT`, `GEO_DATA_DIR`, `CONDA_ROOT` and `AIRFLOW_UID` values written by `setup.sh` are used by local runs; the Docker Compose stack ignores them. Tests and linting stay local:
+
+```bash
+tox
+ruff check .
+mypy
+```
+
+### 8. Project layout
+
+All five source projects remain siblings under `GeographicData/`. Inside the images they are copied to `/opt/geo/<project>`; the relative `../GEO_*` lookups therefore keep working without host mounts.
+
+```text
 GeographicData/
-├── GEO_Download/           # Data downloader (scheduled by the DOWNLOAD tasks)
+├── GEO_Download/           # Data downloader (runtime files baked into geo_airflow_spark)
 │   ├── run_download.py
 │   ├── config.json
-│   ├── downloader/
-│   ├── model/
-│   ├── data/               # Downloaded CSV files (read-only into the Spark nodes)
-│   └── ...
-├── GEO_E2E/                # This project (orchestrator + Docker Compose)
+│   ├── downloader/ model/
+│   └── data/               # seeded into the geo_data named volume
+├── GEO_E2E/                # orchestrator + Compose + image definitions
 │   ├── docker-compose.yaml
-│   ├── .env.example        # Template for the machine-specific .env (committed)
-│   ├── .env                # Machine-specific paths (written by ./setup.sh, not in git)
-│   ├── setup.sh            # Bootstrap: writes .env with this checkout's paths
-│   ├── config.json         # Command templates per job type
-│   ├── jobs.json           # Job chains per data source
-│   ├── model.py            # Config models + build_task_specs()
-│   ├── geo_dag.py          # JobsSubDAG + GEO_DAG (task specs -> Airflow DAG)
-│   ├── geo_pipeline.py     # The Airflow DAG (geo_pipeline)
-│   ├── .airflowignore      # only geo_pipeline.py counts as a DAG file
-│   ├── util.py             # Memory logging helpers
+│   ├── .env.example        # Docker credentials template (committed)
+│   ├── .env                # local credentials (git-ignored)
+│   ├── setup.sh            # host + image-mode bootstrap (GEO_DOCKER=1)
+│   ├── config.json / jobs.json
+│   ├── model.py / geo_dag.py / geo_pipeline.py / util.py
 │   ├── docker/
-│   │   ├── airflow/
-│   │   │   ├── Dockerfile       # Airflow image (providers + psutil + pydantic)
-│   │   │   ├── create_schema.py # geo_airflow schema (run before the migration)
-│   │   │   └── seed_pools.py    # dag.pool_slots pools (idempotent)
-│   │   └── spark/
-│   │       ├── Dockerfile       # Custom Spark image (apache/spark:3.5.5 + JARs)
-│   │       └── jars/            # Hadoop AWS, PostgreSQL JDBC, spark-monitor (gitignored)
-│   ├── environment.yml
-│   ├── docs/
-│   └── ...
-├── GEO_ETL/                # PySpark ETL cluster (INGESTION / DATA_QUALITY / SINGLE_ETL / VIEW)
-│   ├── environment.yml
-│   ├── run_etl.py
-│   └── run_pyspark_csv_test.py
-├── GEO_API/                # FastAPI data-sharing layer (read-only REST API over Supabase)
-│   ├── main.py / run.py
-│   ├── config.json / metadata.json
-│   ├── provider/ / routes/ / model/
-│   ├── environment.yml
-│   └── .env                # Written by ./setup.sh (same five SUPABASE_DB_* values)
-└── GEO_APP/                # React dashboard — reads from GEO_API (no sibling coupling)
-    ├── package.json
-    ├── src/
-    └── ...
+│   │   ├── geo_airflow_spark/
+│   │   │   ├── Dockerfile
+│   │   │   ├── Dockerfile.dockerignore
+│   │   │   ├── environment/        # runtime-only conda env definitions
+│   │   │   ├── jars/               # PostgreSQL JDBC + spark-monitor
+│   │   │   ├── create_schema.py
+│   │   │   ├── seed_pools.py
+│   │   │   ├── refresh-env.sh
+│   │   │   └── airflow-entrypoint.sh
+│   │   ├── geo_fastapi/
+│   │   │   ├── Dockerfile
+│   │   │   ├── environment.yml
+│   │   │   └── entrypoint.sh
+│   │   └── geo_react_app/
+│   │       ├── Dockerfile
+│   │       └── nginx.conf
+│   └── docs/ test/
+├── GEO_ETL/                # PySpark ETL (runtime files baked into geo_airflow_spark)
+├── GEO_API/                # FastAPI service (runtime files baked into geo_fastapi)
+└── GEO_APP/                # React dashboard (compiled into geo_react_app)
 ```
-
-`GEO_APP` is the only project without a hard sibling requirement — it is a Vite/React frontend that talks to a running `GEO_API` over HTTP (`src/config.js` → `http://localhost:8000`), so it can be cloned or built anywhere. Every other project resolves its siblings through the relative `../<name>/` paths shown above.
 
 ## Usage
 
 Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-docker compose --env-file .env up -d --build              # build the Airflow image, start the stack
-docker compose --env-file .env logs -f airflow-scheduler  # follow the scheduler (task execution)
+docker compose up -d --build              # build/rebuild images, start the stack
+docker compose ps                         # service health and published ports
+docker compose logs -f airflow-scheduler  # follow task execution
+docker compose logs -f geo_fastapi        # follow API requests/logs
 ```
 
-Open **http://localhost:8090** (user: `airflow_admin`, pass: `airflow_admin` — the `_AIRFLOW_WWW_USER_*` values from `.env`) to watch the `geo_pipeline` grid, re-run failed tasks (**Clear**), inspect task logs, trigger a run manually (**Trigger DAG**) or pause/unpause the schedule (**Active/Paused** toggle on the **DAGs** page). The DAG is unpaused from the start and the pools are pre-seeded (see [Setup](#4-nothing-else-to-configure--pools-and-unpausing-are-automatic)) — no post-install clicks required.
+Open **http://localhost:8090** (default `airflow_admin` / `airflow_admin`) to watch the `geo_pipeline` grid, re-run failed tasks (**Clear**), inspect task logs, trigger a run manually (**Trigger DAG**) or pause/unpause the schedule (**Active/Paused** toggle on the **DAGs** page). The DAG is unpaused from the start and the pools are pre-seeded (see [Pools and schedule](#6-pools-and-schedule-are-automatic)) — no post-install clicks required.
 
-See [Usage](docs/usage.md) for manual triggers, log locations and example output.
+The API is at **http://localhost:8000** and the dashboard at **http://localhost:3000**.
+
+After changing a project, rebuild the affected image and recreate its containers:
+
+```bash
+docker compose build airflow-init   # or geo_fastapi / geo_react_app
+docker compose up -d
+```
+
+See [Usage](docs/usage.md) for manual triggers, log locations, rebuilds and example output.
 
 Configuration lives in `config.json` (command templates plus the `dag` block: retries, pools, ...) and `jobs.json` (the flat job registry — each job is either *scheduled*, carrying its own `schedule` cron, or *downstreamed* on its parent) — see [Configuration](docs/configuration.md). Quality checks live in [Development](docs/development.md) (`tox`, `ruff check .`, `mypy`).
 
 ## Related Projects
 
 - **GEO_Download** — the actual data downloader that GEO_E2E schedules. Handles HTTP requests, CSV parsing, and file storage with historical/incremental modes.
-- **GEO_ETL** — PySpark ETL cluster for transforming the downloaded CSV data. Connects to the Spark cluster via `spark://localhost:7078`.
-- **GEO_API** — FastAPI data-sharing layer that serves the finished data (`/data-quality/...`, `/event-counts/...`) from the same Supabase project. Shares its five `SUPABASE_DB_*` credentials — `./setup.sh` writes `../GEO_API/.env` alongside `../GEO_ETL/.env`.
-- **GEO_APP** — React dashboard that visualises what GEO_API returns (data quality, data quantity, event categories and locations). Talks to a running GEO_API over HTTP; no direct coupling to this project.
+- **GEO_ETL** — PySpark ETL cluster for transforming the downloaded CSV data. Inside the Docker network it connects to the Spark master via `spark://geo-spark-master:7078` (`SPARK_MASTER_URL`); local runs keep `spark://localhost:7078`.
+- **GEO_API** — FastAPI data-sharing layer that serves the finished data (`/data-quality/...`, `/event-counts/...`) from the same Supabase project. Shares its five `SUPABASE_DB_*` credentials — in Docker they are injected from Compose; locally `./setup.sh` writes `../GEO_API/.env`.
+- **GEO_APP** — React dashboard that visualises what GEO_API returns (data quality, data quantity, event categories and locations). The container serves the compiled app on port 3000 and calls the API at `VITE_API_BASE` (default `http://localhost:8000`).

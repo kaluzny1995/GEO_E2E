@@ -6,11 +6,11 @@ from unittest.mock import patch
 
 import pytest
 
-_CREATE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "docker" / "airflow" / "create_schema.py"
+_CREATE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "docker" / "geo_airflow_spark" / "create_schema.py"
 
 
 def _load_create_schema():
-    """Import docker/airflow/create_schema.py by path (it is not part of a package)."""
+    """Import docker/geo_airflow_spark/create_schema.py by path (it is not part of a package)."""
     # tox's isolated envs carry no SQLAlchemy — same skip pattern as test_geo_pipeline.py
     pytest.importorskip("sqlalchemy")
     spec = importlib.util.spec_from_file_location("create_schema", _CREATE_SCHEMA_PATH)
@@ -22,7 +22,7 @@ def _load_create_schema():
 
 @pytest.fixture(scope="module")
 def create_schema_module():
-    """docker/airflow/create_schema.py imported once for the whole module (the exec is not free)."""
+    """docker/geo_airflow_spark/create_schema.py imported once for the whole module (the exec is not free)."""
     return _load_create_schema()
 
 

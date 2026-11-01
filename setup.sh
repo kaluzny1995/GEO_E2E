@@ -2,8 +2,12 @@
 # Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
 # detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
 # Supabase credentials into the sibling GEO_ETL/.env and GEO_API/.env (setup lives here).
-# Git-ignored; docker compose reads it through `--env-file .env` (see README — Setup).
+# Git-ignored; docker compose auto-loads .env from the project root (see README — Setup).
+#
 # In a Docker container it writes .env.docker instead, non-interactively (defaults only).
+# Set GEO_DOCKER=1 to run in image mode: write .env (not .env.docker), fix the container
+# paths (/opt/geo, /opt/conda) and take the credentials from the process environment.
+# The Airflow image runs it at build time and again from airflow-init at startup.
 #
 # Usage: ./setup.sh [--force] [--help]
 #   --force  regenerate an existing env file (keeps the Airflow login already stored there)
@@ -15,19 +19,20 @@ in_container() {
     grep -qaE '(docker|containerd|kubepods|lxc|podman|libpod)' /proc/1/cgroup 2>/dev/null
 }
 
+DOCKER_MODE="${GEO_DOCKER:-0}"
 IN_CONTAINER=false
-if in_container; then
+if [[ "$DOCKER_MODE" == "1" ]] || in_container; then
     IN_CONTAINER=true
 fi
 
 ENV_FILE=".env"
-if [[ "$IN_CONTAINER" == true ]]; then
+if [[ "$IN_CONTAINER" == true && "$DOCKER_MODE" != "1" ]]; then
     ENV_FILE=".env.docker"
 fi
 FORCE=false
 
 usage() {
-    sed -n '2,8p' "${BASH_SOURCE[0]}" | sed -E 's/^#[[:space:]]?//'
+    sed -n '2,14p' "${BASH_SOURCE[0]}" | sed -E 's/^#[[:space:]]?//'
 }
 
 for arg in "$@"; do
@@ -61,7 +66,8 @@ sync_sibling_envs() {
     for sibling in GEO_ETL GEO_API; do
         target="$GEO_ROOT/$sibling/.env"
         if [[ ! -d "$GEO_ROOT/$sibling" ]]; then
-            echo "warning: $GEO_ROOT/$sibling not found — skipped writing its .env" >&2
+            # The Airflow image contains only GEO_ETL (not GEO_API), so stay quiet there.
+            [[ "$DOCKER_MODE" == "1" ]] || echo "warning: $GEO_ROOT/$sibling not found — skipped writing its .env" >&2
             continue
         fi
         tmp="$(mktemp "${target}.tmp.XXXXXX")"
@@ -125,7 +131,11 @@ prompt() {
 # mirrors the result back into both siblings, so every project runs with the same credentials.
 supabase_value() {
     local key="$1" value="" sibling
-    value="$(previous_value "$key")"
+    # Runtime/CI environment wins (Docker Compose supplies the credentials this way).
+    value="${!key:-}"
+    if [[ -z "$value" ]]; then
+        value="$(previous_value "$key")"
+    fi
     for sibling in GEO_ETL GEO_API; do
         if [[ -z "$value" && -f "$GEO_ROOT/$sibling/.env" ]]; then
             # `|| true`: a missing key must not fail the script (set -e + pipefail)
@@ -136,7 +146,7 @@ supabase_value() {
 }
 
 warn_missing_sibling() {
-    if [[ ! -d "$GEO_ROOT/$1" ]]; then
+    if [[ ! -d "$GEO_ROOT/$1" && "$DOCKER_MODE" != "1" ]]; then
         echo "warning: $GEO_ROOT/$1 not found — the $1 project must be a sibling of $PROJECT_DIR" >&2
     fi
 }
@@ -144,7 +154,11 @@ warn_missing_sibling() {
 warn_missing_sibling GEO_Download
 warn_missing_sibling GEO_ETL
 
-CONDA_ROOT="${CONDA_ROOT:-$(conda info --base 2>/dev/null || true)}"
+if [[ "$DOCKER_MODE" == "1" ]]; then
+    CONDA_ROOT=/opt/conda
+else
+    CONDA_ROOT="${CONDA_ROOT:-$(conda info --base 2>/dev/null || true)}"
+fi
 if [[ -z "$CONDA_ROOT" ]]; then
     for _candidate in "$HOME/anaconda3" "$HOME/miniconda3" "$HOME/miniforge3" \
         /opt/anaconda3 /opt/miniconda3 /opt/homebrew/anaconda3 \
@@ -163,27 +177,36 @@ if [[ -z "$CONDA_ROOT" ]]; then
     fi
 fi
 
-if [[ "$IN_CONTAINER" == true ]]; then
+if [[ "$DOCKER_MODE" == "1" ]]; then
+    CONDA_COMMENT="# Anaconda installed inside the geo_airflow_spark image"
+    UID_COMMENT="# uid of the airflow user inside the container"
+    FILE_COMMENT="Generated inside the image; airflow-init refreshes the credentials from the Docker Compose environment at startup."
+    NEXT_LINE="Wrote $PROJECT_DIR/$ENV_FILE (image mode — Docker Compose provides the credentials at runtime)"
+elif [[ "$IN_CONTAINER" == true ]]; then
     CONDA_COMMENT="# Conda installation inside the container"
     UID_COMMENT="# uid of the user running this script inside the container"
     FILE_COMMENT="Regenerate with ./setup.sh --force, or edit by hand; read by the containerized solution (in-container run)."
     NEXT_LINE="Wrote $PROJECT_DIR/$ENV_FILE (in-container run — compose step not applicable)"
 else
-    CONDA_COMMENT="# Conda installation on the host (bind-mounted into the Airflow containers)"
-    UID_COMMENT="# Host uid of your user so containers can write to bind mounts"
-    FILE_COMMENT="Regenerate with ./setup.sh --force, or edit by hand; docker compose reads it through the --env-file .env flag."
-    NEXT_LINE="Next: docker compose --env-file .env up -d --build"
+    CONDA_COMMENT="# Conda installation on the host (optional — used by local, non-container runs)"
+    UID_COMMENT="# Host uid of your user"
+    FILE_COMMENT="Regenerate with ./setup.sh --force, or edit by hand; docker compose auto-loads .env from this directory."
+    NEXT_LINE="Next: docker compose up -d --build"
 fi
 
 if [[ ! -d "$CONDA_ROOT" ]]; then
     if [[ "$IN_CONTAINER" == true ]]; then
         echo "warning: CONDA_ROOT=$CONDA_ROOT does not exist (no conda on PATH, /opt/conda missing)" >&2
     else
-        echo "warning: CONDA_ROOT=$CONDA_ROOT does not exist — the Airflow image bind-mounts it" >&2
+        echo "warning: CONDA_ROOT=$CONDA_ROOT does not exist (used only by local, non-container runs)" >&2
     fi
 fi
 
-AIRFLOW_UID="$(id -u)"
+if [[ "$DOCKER_MODE" == "1" ]]; then
+    AIRFLOW_UID="${AIRFLOW_UID:-50000}"
+else
+    AIRFLOW_UID="$(id -u)"
+fi
 GEO_DATA_DIR="$GEO_ROOT/GEO_Download/data"
 USERNAME="$(prompt "${_AIRFLOW_WWW_USER_USERNAME:-$(previous_value _AIRFLOW_WWW_USER_USERNAME)}" "Airflow UI login (_AIRFLOW_WWW_USER_USERNAME)")"
 USERNAME="${USERNAME:-airflow_admin}"
@@ -198,7 +221,9 @@ SUPABASE_DB_NAME="$(supabase_value SUPABASE_DB_NAME)"
 AIRFLOW_DB_SCHEMA="${AIRFLOW_DB_SCHEMA:-$(previous_value AIRFLOW_DB_SCHEMA)}"
 AIRFLOW_DB_SCHEMA="${AIRFLOW_DB_SCHEMA:-geo_airflow}"
 if [[ -z "$SUPABASE_DB_USER" || -z "$SUPABASE_DB_PASSWORD" || -z "$SUPABASE_DB_HOST" ]]; then
-    echo "warning: SUPABASE_DB_* not found in $ENV_FILE, $GEO_ROOT/GEO_ETL/.env or $GEO_ROOT/GEO_API/.env — fill them in $ENV_FILE" \
+    # In image mode Compose itself requires the five values before starting the container,
+    # so a build-time warning would only be noise.
+    [[ "$DOCKER_MODE" == "1" ]] || echo "warning: SUPABASE_DB_* not found in $ENV_FILE, $GEO_ROOT/GEO_ETL/.env or $GEO_ROOT/GEO_API/.env — fill them in $ENV_FILE" \
         "(template: .env.example) before docker compose" >&2
 fi
 
@@ -209,7 +234,7 @@ cat > "$PROJECT_DIR/$ENV_FILE" <<EOF
 
 # Parent dir of the sibling projects (GEO_Download, GEO_E2E, GEO_ETL)
 GEO_ROOT=$GEO_ROOT
-# Data folder shared with the Spark containers (read-only mount)
+# Data folder shared with the Spark containers (named geo_data volume in Docker Compose)
 GEO_DATA_DIR=$GEO_DATA_DIR
 $CONDA_COMMENT
 CONDA_ROOT=$CONDA_ROOT

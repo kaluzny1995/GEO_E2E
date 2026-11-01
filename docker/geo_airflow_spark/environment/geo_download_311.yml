@@ -1,0 +1,9 @@
+# Runtime-only definition of the geo_download_311 environment inside the image.
+name: geo_download_311
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - requests>=2.31.0
+  - pydantic>=2.0.0

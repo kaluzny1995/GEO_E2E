@@ -2,7 +2,7 @@
 Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
 detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
 Supabase credentials into the sibling GEO_ETL/.env and GEO_API/.env (setup lives here).
-Git-ignored; docker compose reads it through `--env-file .env` (see README — Setup).
+Git-ignored; docker compose auto-loads it from the project root (see README — Docker setup).
 In a Docker container it writes .env.docker instead, non-interactively (defaults only).
 
 Usage: .\setup.ps1 [-Force] [-Help]
@@ -218,9 +218,9 @@ if ($inContainer) {
     $fileComment = 'Regenerate with .\setup.ps1 -Force, or edit by hand; read by the containerized solution (in-container run).'
     $nextLine = "Wrote $envPath (in-container run — compose step not applicable)"
 } else {
-    $condaComment = '# Conda installation on the host (bind-mounted into the Airflow containers)'
-    $fileComment = 'Regenerate with .\setup.ps1 -Force, or edit by hand; docker compose reads it through the --env-file .env flag.'
-    $nextLine = 'Next: docker compose --env-file .env up -d --build'
+    $condaComment = '# Conda installation on the host (optional — used by local, non-container runs)'
+    $fileComment = 'Regenerate with .\setup.ps1 -Force, or edit by hand; docker compose auto-loads .env from this directory.'
+    $nextLine = 'Next: docker compose up -d --build'
 }
 
 if (-not (Test-Path -LiteralPath $condaRoot)) {
@@ -279,7 +279,7 @@ $content = @"
 
 # Parent dir of the sibling projects (GEO_Download, GEO_E2E, GEO_ETL)
 GEO_ROOT=$geoRoot
-# Data folder shared with the Spark containers (read-only mount)
+# Data folder shared with the Spark containers (named geo_data volume in Docker Compose)
 GEO_DATA_DIR=$geoDataDir
 $condaComment
 CONDA_ROOT=$condaRoot

@@ -44,7 +44,7 @@ the union chain. The cron comes from the scheduled jobs in `jobs.json` (each `DO
 declares it; all must share one cron — Airflow schedules whole DAGs). Every other knob —
 timezone, retries, execution timeout, the download/etl pools and the union source name — comes
 from the `dag` block of `config.json`; the pool slot counts are seeded by `airflow-init` on
-every `docker compose up` (`docker/airflow/seed_pools.py`).
+every `docker compose up` (`docker/geo_airflow_spark/seed_pools.py`).
 
 - The subDAGs organize the code only: every one renders its tasks into this same DAG, so the
   grid still shows the flat chains of `jobs.json`.

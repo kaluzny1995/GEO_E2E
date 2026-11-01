@@ -1,4 +1,4 @@
-"""Tests for the stack wiring: the Supabase metadata DB in docker-compose.yaml and the env files."""
+"""Tests for the three-image Docker stack and its environment wiring."""
 
 from pathlib import Path
 
@@ -6,6 +6,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _COMPOSE = (_ROOT / "docker-compose.yaml").read_text()
 _ENV_EXAMPLE = (_ROOT / ".env.example").read_text()
 _GITIGNORE = (_ROOT / ".gitignore").read_text()
+_DOCKER = _ROOT / "docker"
 
 # Same variable names as the GEO_ETL project — the password deliberately travels in
 # PGPASSWORD (libpq) instead of inside the SQLAlchemy URL, so it needs no URL-encoding
@@ -17,18 +18,34 @@ SUPABASE_VARS = (
     "SUPABASE_DB_NAME",
 )
 
+IMAGES = {
+    "geo_airflow_spark": _DOCKER / "geo_airflow_spark" / "Dockerfile",
+    "geo_fastapi": _DOCKER / "geo_fastapi" / "Dockerfile",
+    "geo_react_app": _DOCKER / "geo_react_app" / "Dockerfile",
+}
+
 
 def _conn_line() -> str:
     """The single compose line that assembles the SQLAlchemy connection URL."""
     return next(line for line in _COMPOSE.splitlines() if "SQL_ALCHEMY_CONN" in line)
 
 
-def test_no_local_postgres_left_in_compose() -> None:
-    """The local Postgres service, its volume and its port are gone — Supabase is the metadata DB."""
-    assert "airflow-postgres" not in _COMPOSE
-    assert "postgres_data" not in _COMPOSE
-    assert "postgres:16" not in _COMPOSE
-    assert "5472" not in _COMPOSE
+def test_three_images_and_dockerfiles_exist() -> None:
+    """Exactly the three requested images have a Dockerfile in their subfolder."""
+    for image, dockerfile in IMAGES.items():
+        assert dockerfile.is_file(), dockerfile
+        assert f"image: {image}:latest" in _COMPOSE, image
+        assert f"dockerfile: GEO_E2E/docker/{image}/Dockerfile" in _COMPOSE, image
+
+
+def test_no_host_bind_mounts_or_host_conda_left_in_compose() -> None:
+    """The images are self-contained: no host project, host conda or host data mounts."""
+    assert "network_mode: host" not in _COMPOSE
+    assert "CONDA_ROOT: ${CONDA_ROOT" not in _COMPOSE
+    assert "${GEO_ROOT" not in _COMPOSE
+    assert "${GEO_DATA_DIR" not in _COMPOSE
+    assert "geo_data:/opt/geo/GEO_Download/data" in _COMPOSE
+    assert "airflow_data:/opt/airflow" in _COMPOSE
 
 
 def test_metadata_db_is_built_from_the_supabase_env_vars() -> None:
@@ -51,9 +68,16 @@ def test_password_travels_in_pgpassword_not_in_the_url() -> None:
 
 
 def test_airflow_init_creates_the_schema_before_the_migration() -> None:
-    """create_schema.py must run before /entrypoint triggers `airflow db migrate` — Airflow
-    creates its tables in search_path, which would silently fall back to the default schema."""
+    """create_schema.py must run before /entrypoint triggers `airflow db migrate`."""
     assert _COMPOSE.index("create_schema.py") < _COMPOSE.index("/entrypoint airflow version")
+
+
+def test_airflow_credentials_have_the_documented_defaults() -> None:
+    """The Airflow login defaults to airflow_admin / airflow_admin and is overridable."""
+    assert "${_AIRFLOW_WWW_USER_USERNAME:-airflow_admin}" in _COMPOSE
+    assert "${_AIRFLOW_WWW_USER_PASSWORD:-airflow_admin}" in _COMPOSE
+    assert "_AIRFLOW_WWW_USER_USERNAME=airflow_admin" in _ENV_EXAMPLE
+    assert "_AIRFLOW_WWW_USER_PASSWORD=airflow_admin" in _ENV_EXAMPLE
 
 
 def test_env_example_documents_the_supabase_variables() -> None:
@@ -61,6 +85,7 @@ def test_env_example_documents_the_supabase_variables() -> None:
     for var in (*SUPABASE_VARS, "AIRFLOW_DB_SCHEMA"):
         assert f"{var}=" in _ENV_EXAMPLE, var
     assert "AIRFLOW_DB_SCHEMA=geo_airflow" in _ENV_EXAMPLE
+    assert "VITE_API_BASE=" in _ENV_EXAMPLE
 
 
 def test_credentials_stay_out_of_git() -> None:
@@ -72,7 +97,7 @@ def test_credentials_stay_out_of_git() -> None:
 
 
 def test_setup_scripts_write_the_supabase_variables() -> None:
-    """setup.sh and setup.ps1 carry the credentials into the env file (from GEO_ETL/.env)."""
+    """setup.sh and setup.ps1 carry the credentials into the env file."""
     for script in ("setup.sh", "setup.ps1"):
         text = (_ROOT / script).read_text()
         for var in SUPABASE_VARS:
@@ -94,3 +119,38 @@ def test_setup_scripts_mirror_the_credentials_into_the_sibling_projects() -> Non
         for sibling in ("GEO_ETL", "GEO_API"):
             assert sibling in text, f"{script}: {sibling}"
         assert early_exit_call[script] in text, f"{script}: early-exit must still mirror"
+
+
+def test_container_startup_refreshes_env_from_compose() -> None:
+    """Image builds contain paths only; airflow-init injects the Compose credentials."""
+    airflow_dockerfile = IMAGES["geo_airflow_spark"].read_text()
+    fastapi_dockerfile = IMAGES["geo_fastapi"].read_text()
+    assert "GEO_DOCKER=1 ./setup.sh --force" in airflow_dockerfile
+    assert "/opt/geo/bin/refresh-env.sh" in _COMPOSE
+    assert 'entrypoint: ["/opt/geo/bin/airflow-entrypoint.sh"]' in _COMPOSE
+    assert "airflow-entrypoint.sh" in airflow_dockerfile
+    assert "GEO_DOCKER=1" in (_DOCKER / "geo_airflow_spark" / "refresh-env.sh").read_text()
+    assert "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD" in (_DOCKER / "geo_fastapi" / "entrypoint.sh").read_text()
+    assert "entrypoint.sh" in fastapi_dockerfile
+
+
+def test_container_dependencies() -> None:
+    """Airflow waits for Spark; React waits for the API; the API and Airflow use Supabase."""
+    assert "SPARK_MASTER_URL: spark://geo-spark-master:7078" in _COMPOSE
+    assert "AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8090/execution/" in _COMPOSE
+    assert "condition: service_healthy" in _COMPOSE  # Spark/API health gating
+    assert "geo_fastapi:" in _COMPOSE
+    assert "VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}" in _COMPOSE
+
+
+def test_images_exclude_development_files() -> None:
+    """Every build context excludes docs/tests/tooling; the source folders are selectively copied."""
+    for image in IMAGES:
+        ignore = (_DOCKER / image / "Dockerfile.dockerignore").read_text()
+        for pattern in ("**/test", "**/docs", "**/.tox", "**/node_modules", "**/*.md", "**/.env"):
+            assert pattern in ignore, f"{image}: {pattern}"
+    airflow_dockerfile = IMAGES["geo_airflow_spark"].read_text()
+    # Only runtime entry points/packages are copied, not the whole repository trees.
+    assert "GEO_E2E/test/" not in airflow_dockerfile
+    assert "GEO_E2E/docs/" not in airflow_dockerfile
+    assert "GEO_ETL/test/" not in airflow_dockerfile
