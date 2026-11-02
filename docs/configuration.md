@@ -378,6 +378,28 @@ For a fresh Docker-only checkout, **only the five `SUPABASE_DB_*` values are req
 
 A missing variable stops compose early with a message naming the key (`Set SUPABASE_DB_HOST in .env`). `.env` is git-ignored; only `.env.example` (placeholders) is committed. The legacy `.env.docker` name is still ignored by git but is not used by the Docker images (they write `.env`).
 
+## Resource tuning (`.env`)
+
+The stack is bounded by default. These optional variables override the Compose defaults and are documented in `.env.example`:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `AIRFLOW_PARALLELISM` | `8` | Number of `LocalExecutor` worker processes in the scheduler (Airflow's default is 32) |
+| `AIRFLOW_MAX_ACTIVE_TASKS_PER_DAG` | `6` | Per-DAG task cap (pools still limit real concurrency to 3 downloads + 2 ETL jobs) |
+| `AIRFLOW_MAX_ACTIVE_RUNS_PER_DAG` | `1` | Prevents overlapping scheduled runs |
+| `AIRFLOW_MEM_LIMIT` | `1g` | Common hard limit for one-shot Airflow services |
+| `AIRFLOW_SCHEDULER_MEM_LIMIT` | `4g` | Scheduler + all task subprocesses + PySpark drivers |
+| `AIRFLOW_INIT_MEM_LIMIT` / `AIRFLOW_API_MEM_LIMIT` / `AIRFLOW_DAG_PROCESSOR_MEM_LIMIT` | `2g` / `1g` / `1g` | One-shot init, API server, DAG processor |
+| `SPARK_MASTER_MEM_LIMIT` / `SPARK_WORKER_MEM_LIMIT` | `1g` / `3g` | Spark master and each worker container |
+| `SPARK_WORKER_MEMORY` / `SPARK_WORKER_CORES` | `2g` / `2` | Resources advertised by each Spark worker |
+| `SPARK_DRIVER_MEMORY` / `SPARK_EXECUTOR_MEMORY` | `1g` / `1g` | PySpark heap caps applied by `GEO_ETL/config.json` |
+| `SPARK_EXECUTOR_CORES` / `SPARK_SHUFFLE_PARTITIONS` / `SPARK_MAX_RESULT_SIZE` | `1` / `8` / `256m` | Executor cores, shuffle partitions and driver result cap |
+| `GEO_API_MEM_LIMIT` / `GEO_APP_MEM_LIMIT` | `1g` / `128m` | FastAPI and nginx |
+
+Every service also has `memswap_limit` equal to its memory limit, so containers cannot push the host into swap; `oom_score_adj: 500` makes a container the kernel's first OOM victim. Use `docker stats --no-stream` to see actual usage, and `docker compose down` to release everything when the stack is not needed.
+
+The first build is the other memory peak: Anaconda's solver runs in two images. `./build-images.sh` builds the three images serially; `docker compose build` may run independent services in parallel.
+
 ## Modifying the schedule
 
 Edit the `schedule` field on the scheduled jobs in `jobs.json` — the nine `DOWNLOAD` objects (they must all carry the **same** cron: Airflow schedules the whole DAG, and `model.resolve_schedule()` rejects differing crons). The `timezone` stays in the `dag` block of `config.json`. The DAG processor picks the change up automatically within ~30 seconds — no restart needed.

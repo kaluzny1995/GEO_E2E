@@ -94,6 +94,7 @@ flowchart TD
 
 - **Docker Engine 24+ and Docker Compose v2** — the whole stack runs in containers.
 - **A Supabase project** — its PostgreSQL credentials are used by Airflow's metadata DB, GEO_ETL and GEO_API.
+- **At least 16 GB RAM on the host** — the default container limits total about 14 GB; use the tuning block in `.env.example` on smaller machines. The first Anaconda build is the other memory peak.
 - **No host conda, host project paths or sibling conda environments are required for the Dockerized run.**
 - Host conda + Node.js are only needed for the optional local development workflow below.
 
@@ -142,10 +143,14 @@ Full walkthrough and URL anatomy: [Configuration → Supabase metadata DB](docs/
 ### 2. Build and start the stack
 
 ```bash
-docker compose up -d --build
+./build-images.sh      # serial builds; safer on a laptop
+docker compose up -d
 ```
 
-The first build is long because Anaconda and the `geo_*_311` environments are installed into the images. Later rebuilds reuse the Docker layer cache.
+`docker compose up -d --build` works too, but builds independent images in parallel and
+can spike RAM on the first run. The first build is long because Anaconda and the
+`geo_*_311` environments are installed into the images; later rebuilds reuse the Docker
+layer cache.
 
 | Service | Ports | Purpose |
 |---------|-------|---------|
@@ -155,8 +160,8 @@ The first build is long because Anaconda and the `geo_*_311` environments are in
 | `airflow-api-server` | **8090** | Airflow REST API + web UI |
 | `airflow-dag-activate` | – | One-shot: ensures `geo_pipeline` is unpaused after startup |
 | `geo-spark-master` | **7078**, **8083** | Spark master RPC + web UI |
-| `geo-spark-worker-1` | **8084** | Spark worker (2 cores, 2g RAM) |
-| `geo-spark-worker-2` | **8085** | Spark worker (2 cores, 2g RAM) |
+| `geo-spark-worker-1` | **8084** | Spark worker (2 cores, 2g advertised, 3g container limit) |
+| `geo-spark-worker-2` | **8085** | Spark worker (2 cores, 2g advertised, 3g container limit) |
 | `geo_fastapi` | **8000** | GEO_API (Swagger UI at `/docs`) |
 | `geo_react_app` | **3000** | React dashboard served by nginx |
 
@@ -171,7 +176,53 @@ If a host port is already in use, override it in `.env` without changing the con
 `GEO_APP_HOST_PORT` (see `.env.example`). Remember to update `VITE_API_BASE` and rebuild
 `geo_react_app` when the API host port changes.
 
-### 3. Images and container dependencies
+### 3. Memory and resource limits
+
+The stack is deliberately bounded so a bad task cannot freeze the host:
+
+| Limit | Default | Why |
+|-------|---------|-----|
+| `AIRFLOW__CORE__PARALLELISM` | `8` | Airflow's `LocalExecutor` default is **32 worker processes**; the pools only need 3 downloads + 2 ETL jobs at a time |
+| `AIRFLOW_SCHEDULER_MEM_LIMIT` | `4g` | The scheduler container also runs every task subprocess and its PySpark driver |
+| `AIRFLOW_MEM_LIMIT` / `AIRFLOW_INIT_MEM_LIMIT` | `1g` / `2g` | API server, DAG processor and the one-shot init |
+| `SPARK_WORKER_MEM_LIMIT` | `3g` per worker | Worker JVM + one executor JVM |
+| `SPARK_DRIVER_MEMORY` / `SPARK_EXECUTOR_MEMORY` | `1g` each | PySpark heap caps written into every ETL `SparkSession` |
+| `GEO_API_MEM_LIMIT` / `GEO_APP_MEM_LIMIT` | `1g` / `128m` | FastAPI and nginx |
+
+Every service gets `mem_limit` + `memswap_limit` (equal values, so containers cannot push
+the host into swap) and `oom_score_adj: 500`, which makes the kernel kill a container
+before the desktop session if the host is still short on memory.
+
+Tune them in `.env` (the defaults are in `.env.example`). For a small laptop:
+
+```env
+AIRFLOW_PARALLELISM=4
+AIRFLOW_MAX_ACTIVE_TASKS_PER_DAG=4
+AIRFLOW_SCHEDULER_MEM_LIMIT=3g
+SPARK_WORKER_MEMORY=1g
+SPARK_WORKER_MEM_LIMIT=2g
+SPARK_DRIVER_MEMORY=512m
+SPARK_EXECUTOR_MEMORY=512m
+```
+
+**Building safely** — the first build runs Anaconda's dependency solver inside two images.
+`docker compose build` builds independent services in parallel, which can spike RAM. Use:
+
+```bash
+./build-images.sh          # builds airflow-init, geo_fastapi and geo_react_app serially
+```
+
+and avoid running the old stack while building for the first time. Check what is actually
+running with `docker stats --no-stream`; stop unused workers with
+`docker compose stop geo-spark-worker-2` when you are not running ETL jobs. `docker compose down`
+releases all container memory (and `restart: unless-stopped` will otherwise start the
+stack again after a reboot). `docker compose build --memory` is ignored by BuildKit, so a
+serial build is the supported way to cap the build peak.
+
+> The conda definitions use the `libmamba` solver and `PIP_NO_CACHE_DIR=1`; both reduce the
+> build's peak memory and disk churn.
+
+### 4. Images and container dependencies
 
 | Image | Contents | Published ports | Dockerfile |
 |-------|----------|-----------------|------------|
@@ -188,7 +239,7 @@ Container dependencies:
 - `geo_fastapi` → **Supabase** (read-only queries).
 - `geo_react_app` → `geo_fastapi` healthy. The browser then calls the API at `VITE_API_BASE` (default `http://localhost:8000`).
 
-### 4. Rebuilding after repository changes
+### 5. Rebuilding after repository changes
 
 The images copy the source at build time and use **no source bind mounts**, so every repository change is picked up by a rebuild:
 
@@ -212,6 +263,9 @@ docker compose build geo_react_app  # builds geo_react_app (GEO_APP)
 docker compose up -d
 ```
 
+On a memory-constrained laptop use `./build-images.sh` instead — it runs exactly these
+three builds serially, keeping only one conda solver alive at a time.
+
 `airflow-init` is the Compose service that owns the shared `geo_airflow_spark` build; the scheduler, API server, DAG processor and Spark services reference the same image.
 
 - `docker compose restart` **does not** rebuild an image; use `build` first.
@@ -219,7 +273,7 @@ docker compose up -d
 - The React API URL is inlined by Vite, so changing `VITE_API_BASE` also requires rebuilding `geo_react_app`.
 - Base images are pinned to Airflow 3.3.2, Spark 3.5.5, Anaconda 2024.10-1, Node 20 and nginx 1.27.
 
-### 5. Data, logs and volumes
+### 6. Data, logs and volumes
 
 | Volume | Mount | Persists |
 |--------|-------|----------|
@@ -229,7 +283,7 @@ docker compose up -d
 
 The `geo_data` volume is seeded from the image's `GEO_Download/data` directory on first use and then survives rebuilds and `docker compose down`. `docker compose down -v` deletes all three volumes (and the data).
 
-### 6. Pools and schedule are automatic
+### 7. Pools and schedule are automatic
 
 - `airflow-init` seeds the `download` (3 slots) and `etl` (2 slots) pools on every start.
 - `dags_are_paused_at_creation=false` creates `geo_pipeline` unpaused; `airflow-dag-activate` also repairs an already-paused DAG after startup.
@@ -242,7 +296,7 @@ docker compose run --rm airflow-cli pools list
 docker compose run --rm airflow-cli dags list
 ```
 
-### 7. Local development without Docker (optional)
+### 8. Local development without Docker (optional)
 
 Host conda is only needed for running the DAG code, tests or tooling outside containers:
 
@@ -261,7 +315,7 @@ ruff check .
 mypy
 ```
 
-### 8. Project layout
+### 9. Project layout
 
 All five source projects remain siblings under `GeographicData/`. Inside the images they are copied to `/opt/geo/<project>`; the relative `../GEO_*` lookups therefore keep working without host mounts.
 
@@ -277,6 +331,7 @@ GeographicData/
 │   ├── .env.example        # Docker credentials template (committed)
 │   ├── .env                # local credentials (git-ignored)
 │   ├── setup.sh            # host + image-mode bootstrap (GEO_DOCKER=1)
+│   ├── build-images.sh     # serial image builds for memory-constrained machines
 │   ├── config.json / jobs.json
 │   ├── model.py / geo_dag.py / geo_pipeline.py / util.py
 │   ├── docker/
@@ -313,7 +368,7 @@ docker compose logs -f airflow-scheduler  # follow task execution
 docker compose logs -f geo_fastapi        # follow API requests/logs
 ```
 
-Open **http://localhost:8090** (default `airflow_admin` / `airflow_admin`) to watch the `geo_pipeline` grid, re-run failed tasks (**Clear**), inspect task logs, trigger a run manually (**Trigger DAG**) or pause/unpause the schedule (**Active/Paused** toggle on the **DAGs** page). The DAG is unpaused from the start and the pools are pre-seeded (see [Pools and schedule](#6-pools-and-schedule-are-automatic)) — no post-install clicks required.
+Open **http://localhost:8090** (default `airflow_admin` / `airflow_admin`) to watch the `geo_pipeline` grid, re-run failed tasks (**Clear**), inspect task logs, trigger a run manually (**Trigger DAG**) or pause/unpause the schedule (**Active/Paused** toggle on the **DAGs** page). The DAG is unpaused from the start and the pools are pre-seeded (see [Pools and schedule](#7-pools-and-schedule-are-automatic)) — no post-install clicks required.
 
 The API is at **http://localhost:8000** and the dashboard at **http://localhost:3000**.
 

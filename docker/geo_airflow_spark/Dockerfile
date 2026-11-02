@@ -38,7 +38,9 @@ COPY --from=spark /opt/spark /opt/spark
 # Anaconda + conda in the default PATH (the base interpreter stays Airflow's Python —
 # only the conda command is symlinked, never /opt/conda/bin ahead of the system python).
 COPY --from=anaconda /opt/conda /opt/conda
-ENV CONDA_ROOT=/opt/conda
+ENV CONDA_ROOT=/opt/conda \
+    CONDA_SOLVER=libmamba \
+    PIP_NO_CACHE_DIR=1
 RUN ln -s /opt/conda/bin/conda /usr/local/bin/conda \
     && conda --version
 
@@ -53,9 +55,9 @@ RUN mkdir -p /opt/spark/work /opt/spark/logs \
 # Runtime-only conda environments. The repository environment.yml files also contain
 # pytest/ruff/tox/mypy; those are intentionally absent from the image.
 COPY GEO_E2E/docker/geo_airflow_spark/environment/ /tmp/geo-environments/
-RUN conda env create -f /tmp/geo-environments/geo_e2e_311.yml \
-    && conda env create -f /tmp/geo-environments/geo_download_311.yml \
-    && conda env create -f /tmp/geo-environments/geo_etl_311.yml \
+RUN conda env create --solver=libmamba -f /tmp/geo-environments/geo_e2e_311.yml \
+    && conda env create --solver=libmamba -f /tmp/geo-environments/geo_download_311.yml \
+    && conda env create --solver=libmamba -f /tmp/geo-environments/geo_etl_311.yml \
     && conda clean --all --yes \
     && rm -rf /tmp/geo-environments
 

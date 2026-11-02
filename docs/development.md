@@ -19,7 +19,7 @@ Tests cover:
 - **DAG generation** — `build_task_specs()` validates the flat jobs.json registry (unique `name`s and `task_id`s, resolvable `next_jobs` references, one parent per job, no cycles, scheduled jobs are unsourced roots sharing one cron via `resolve_schedule()`, the union job never scheduled, no `VERDICT` job declared) and turns it into Airflow task specs: one spec per job with the unique, declared `task_id` of its jobs.json entry (`NIFC.single_etl`, `NIFC_etl.data_quality`, `View.<view_name>`), parent/child wiring via `upstream`, `all_success` for every source-chain task, the union root waiting on the nine `<source>.single_etl` tasks with `all_done_min_one_success` (runs only if ≥1 of them succeeded; the DATA_QUALITY and VIEW jobs stay outside the fan-in), commands carried over from `config.json`, the synthesized verdict task (`Union.verdict`: `all_done` on every registry task, its Jinja command reading the union root's state via `ti.get_task_states()` so it alone decides the run's outcome), and `ValueError` when the `Union` job is missing or the registry is invalid
 - **Airflow rendering** — `geo_dag.JobsSubDAG` / `geo_dag.GEO_DAG` (`test/test_geo_pipeline.py`, skipped where Airflow is not installed): the registry grouped into nine source subDAGs + the union subDAG (its twenty tasks: fan-in, data quality, views, verdict), the rendered DAG matching `build_task_specs()` task-for-task (ids, upstreams, trigger rules, commands, pools, cwd), the union fan-in and its data-quality/view children, the verdict rendered as the DAG's only leaf, the verdict command's Jinja rendering (exits 1 unless `Union.single_etl` succeeded), and the `@dag` keywords
 - **Pool seeding** — `test/test_seed_pools.py`: `seed_pools()` (`docker/geo_airflow_spark/seed_pools.py`) creates every `dag.pool_slots` pool via the airflow CLI through `/entrypoint`, and the pools seeded at startup are asserted to match the shipped `config.json`
-- **Stack wiring** — `test/test_compose.py` asserts the three-image setup: the Dockerfiles and image names, no host bind mounts or host conda, the connection URL built from the `SUPABASE_DB_*` env vars with `sslmode=require` and `search_path=geo_airflow`, the password travelling in `PGPASSWORD` (never in the URL), `create_schema.py` running before the migration, the `.env.example` template, Airflow's `airflow_admin` defaults, runtime credential injection, container dependencies and the build ignore files. `test/test_create_schema.py` covers the schema step itself (`get_schema()` default/environment override/identifier validation and the idempotent `CREATE SCHEMA IF NOT EXISTS`, skipped where SQLAlchemy is absent — same pattern as the Airflow tests)
+- **Stack wiring** — `test/test_compose.py` asserts the three-image setup: the Dockerfiles and image names, no host bind mounts or host conda, the connection URL built from the `SUPABASE_DB_*` env vars with `sslmode=require` and `search_path=geo_airflow`, the password travelling in `PGPASSWORD` (never in the URL), `create_schema.py` running before the migration, the `.env.example` template, Airflow's `airflow_admin` defaults, runtime credential injection, container dependencies, the build ignore files, per-service `mem_limit`/`memswap_limit` and the capped `LocalExecutor` parallelism. `test/test_create_schema.py` covers the schema step itself (`get_schema()` default/environment override/identifier validation and the idempotent `CREATE SCHEMA IF NOT EXISTS`, skipped where SQLAlchemy is absent — same pattern as the Airflow tests)
 - **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
 
 The Airflow conversion (`geo_dag.py`) is unit-tested in the project env and skipped elsewhere: `test/test_geo_pipeline.py` starts with `pytest.importorskip("airflow")`, so the isolated `tox -e py311` run (no Airflow in its deps) skips it while `pytest` in `geo_e2e_311` runs it. The DAG wrapper (`geo_pipeline.py`) is type-checked by mypy and importable locally but not unit-tested — `apache-airflow`, `apache-airflow-providers-standard` and `pendulum` are installed in the dev env with the same pins as the Airflow container (see `environment.yml`), so the IDE resolves the imports and import regressions fail fast:
@@ -34,17 +34,22 @@ Problems that only show up against the container (e.g. broken job config) still 
 
 ```bash
 docker compose config --quiet                  # validate the rendered Compose file
-docker compose build                           # rebuild the changed image(s)
+./build-images.sh                              # serial builds (or: docker compose build)
 docker compose up -d                            # recreate containers
 docker compose ps                               # every service healthy
+docker stats --no-stream                        # memory stays below the cgroup limits
 docker compose logs -f airflow-scheduler        # DAG parsing + task execution
 curl -fsS http://localhost:8000/health          # GEO_API + Supabase
 curl -fsS http://localhost:8090/api/v2/monitor/health
 curl -fsS http://localhost:8083/ | head          # Spark master UI
 curl -fsS http://localhost:3000/ | head          # React app
+docker compose exec airflow-scheduler airflow config get-value core parallelism   # 8, not 32
 docker compose exec airflow-scheduler conda run -n geo_etl_311 python -c "import pyspark, findspark; print(pyspark.__version__)"
 docker compose run --rm airflow-cli dags list    # geo_pipeline present and unpaused
 ```
+
+Use `./build-images.sh` on a laptop: `docker compose build` may run the Anaconda-based
+images in parallel and spike memory.
 
 ## Ruff, mypy and tox
 

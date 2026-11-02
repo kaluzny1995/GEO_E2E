@@ -154,3 +154,43 @@ def test_images_exclude_development_files() -> None:
     assert "GEO_E2E/test/" not in airflow_dockerfile
     assert "GEO_E2E/docs/" not in airflow_dockerfile
     assert "GEO_ETL/test/" not in airflow_dockerfile
+
+
+def test_runtime_is_memory_bounded() -> None:
+    """Every container has a hard limit and the Airflow executor is not left at 32 workers."""
+    # Hard cgroup limits + no container swap + OOM preference over the desktop session.
+    assert "mem_limit:" in _COMPOSE
+    assert "memswap_limit:" in _COMPOSE
+    assert "oom_score_adj: 500" in _COMPOSE
+    assert "mem_limit: ${AIRFLOW_SCHEDULER_MEM_LIMIT:-4g}" in _COMPOSE
+    assert "mem_limit: ${AIRFLOW_INIT_MEM_LIMIT:-2g}" in _COMPOSE
+    assert "mem_limit: ${SPARK_WORKER_MEM_LIMIT:-3g}" in _COMPOSE
+    assert "mem_limit: ${GEO_API_MEM_LIMIT:-1g}" in _COMPOSE
+    assert "mem_limit: ${GEO_APP_MEM_LIMIT:-128m}" in _COMPOSE
+
+    # LocalExecutor workers and per-DAG concurrency are capped below Airflow's defaults.
+    assert "AIRFLOW__CORE__PARALLELISM: ${AIRFLOW_PARALLELISM:-8}" in _COMPOSE
+    assert "AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: ${AIRFLOW_MAX_ACTIVE_TASKS_PER_DAG:-6}" in _COMPOSE
+    assert "AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: ${AIRFLOW_MAX_ACTIVE_RUNS_PER_DAG:-1}" in _COMPOSE
+
+    # Spark drivers/executors are capped too, and the knobs are documented in the template.
+    assert "SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-1g}" in _COMPOSE
+    assert "SPARK_EXECUTOR_MEMORY: ${SPARK_EXECUTOR_MEMORY:-1g}" in _COMPOSE
+    assert "SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}" in _COMPOSE
+    for var in (
+        "AIRFLOW_PARALLELISM=8",
+        "AIRFLOW_SCHEDULER_MEM_LIMIT=4g",
+        "SPARK_WORKER_MEM_LIMIT=3g",
+        "SPARK_DRIVER_MEMORY=1g",
+    ):
+        assert var in _ENV_EXAMPLE, var
+
+
+def test_serial_build_helper_exists() -> None:
+    """A serial build helper is available for machines where parallel conda builds thrash."""
+    script = _ROOT / "build-images.sh"
+    assert script.is_file()
+    text = script.read_text()
+    for service in ("airflow-init", "geo_fastapi", "geo_react_app"):
+        assert service in text
+    assert "docker compose build" in text

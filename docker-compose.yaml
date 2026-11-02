@@ -10,8 +10,25 @@
 
 name: geo_e2e
 
+# Keep container logs bounded. The Spark master healthcheck and the DAG processor log
+# continuously, so an unbounded json-file log can grow by hundreds of MB per week.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# A hard cgroup limit is the important safety net: without it a runaway Airflow task or
+# PySpark driver can consume all host RAM and freeze the machine before the kernel OOM
+# killer gets a chance to act. memswap_limit == mem_limit disables container swap, so
+# the kernel cannot thrash the host swapfile either. oom_score_adj makes the containers
+# the preferred OOM victim instead of the desktop session.
 x-airflow-spark-image: &airflow-spark-image
   image: geo_airflow_spark:latest
+  mem_limit: ${AIRFLOW_MEM_LIMIT:-1g}
+  memswap_limit: ${AIRFLOW_MEM_LIMIT:-1g}
+  oom_score_adj: 500
+  logging: *default-logging
 
 x-airflow-common: &airflow-common
   <<: *airflow-spark-image
@@ -20,6 +37,13 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__CORE__DAGS_FOLDER: /opt/geo/GEO_E2E
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # LocalExecutor spawns `parallelism` worker processes in the scheduler container.
+    # The Airflow default is 32 Python interpreters; on a laptop this is needless
+    # overhead. The pools cap real concurrency at 3 downloads + 2 ETL jobs, so 8
+    # workers is plenty and leaves headroom for the scheduler itself.
+    AIRFLOW__CORE__PARALLELISM: ${AIRFLOW_PARALLELISM:-8}
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: ${AIRFLOW_MAX_ACTIVE_TASKS_PER_DAG:-6}
+    AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: ${AIRFLOW_MAX_ACTIVE_RUNS_PER_DAG:-1}
     # Create DAGs unpaused on first parse — no manual unpause in the UI needed.
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
@@ -52,6 +76,14 @@ x-airflow-common: &airflow-common
     GEO_DOCKER: "1"
     # GEO_ETL's Spark driver connects to the master by Compose DNS name.
     SPARK_MASTER_URL: spark://geo-spark-master:7078
+    # Driver/executor memory caps read by GEO_ETL's AppConfig. A driver runs inside the
+    # scheduler container for every ETL task; keep this small so the scheduler memory
+    # limit below is a real ceiling.
+    SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-1g}
+    SPARK_EXECUTOR_MEMORY: ${SPARK_EXECUTOR_MEMORY:-1g}
+    SPARK_EXECUTOR_CORES: ${SPARK_EXECUTOR_CORES:-1}
+    SPARK_SHUFFLE_PARTITIONS: ${SPARK_SHUFFLE_PARTITIONS:-8}
+    SPARK_MAX_RESULT_SIZE: ${SPARK_MAX_RESULT_SIZE:-256m}
   volumes:
     - airflow_data:/opt/airflow
     - geo_data:/opt/geo/GEO_Download/data
@@ -66,6 +98,8 @@ services:
   # and Spark services reference the same image (one build, not one per service).
   airflow-init:
     <<: *airflow-common
+    mem_limit: ${AIRFLOW_INIT_MEM_LIMIT:-2g}
+    memswap_limit: ${AIRFLOW_INIT_MEM_LIMIT:-2g}
     build:
       context: ..
       dockerfile: GEO_E2E/docker/geo_airflow_spark/Dockerfile
@@ -97,6 +131,8 @@ services:
 
   airflow-dag-processor:
     <<: *airflow-common
+    mem_limit: ${AIRFLOW_DAG_PROCESSOR_MEM_LIMIT:-1g}
+    memswap_limit: ${AIRFLOW_DAG_PROCESSOR_MEM_LIMIT:-1g}
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -105,6 +141,10 @@ services:
 
   airflow-scheduler:
     <<: *airflow-common
+    # The scheduler container also hosts every LocalExecutor task and its PySpark
+    # driver, so it gets the largest Airflow budget.
+    mem_limit: ${AIRFLOW_SCHEDULER_MEM_LIMIT:-4g}
+    memswap_limit: ${AIRFLOW_SCHEDULER_MEM_LIMIT:-4g}
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -127,6 +167,8 @@ services:
 
   airflow-api-server:
     <<: *airflow-common
+    mem_limit: ${AIRFLOW_API_MEM_LIMIT:-1g}
+    memswap_limit: ${AIRFLOW_API_MEM_LIMIT:-1g}
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -177,6 +219,8 @@ services:
 
   geo-spark-master:
     <<: *airflow-spark-image
+    mem_limit: ${SPARK_MASTER_MEM_LIMIT:-1g}
+    memswap_limit: ${SPARK_MASTER_MEM_LIMIT:-1g}
     user: "50000:0"
     environment:
       SPARK_MASTER_HOST: geo-spark-master
@@ -203,10 +247,12 @@ services:
 
   geo-spark-worker-1:
     <<: *airflow-spark-image
+    mem_limit: ${SPARK_WORKER_MEM_LIMIT:-3g}
+    memswap_limit: ${SPARK_WORKER_MEM_LIMIT:-3g}
     user: "50000:0"
     environment:
-      SPARK_WORKER_MEMORY: 2g
-      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
       SPARK_WORKER_WEBUI_PORT: "8081"
     entrypoint: ["/opt/spark/bin/spark-class"]
     command: ["org.apache.spark.deploy.worker.Worker", "spark://geo-spark-master:7078"]
@@ -229,10 +275,12 @@ services:
 
   geo-spark-worker-2:
     <<: *airflow-spark-image
+    mem_limit: ${SPARK_WORKER_MEM_LIMIT:-3g}
+    memswap_limit: ${SPARK_WORKER_MEM_LIMIT:-3g}
     user: "50000:0"
     environment:
-      SPARK_WORKER_MEMORY: 2g
-      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
       SPARK_WORKER_WEBUI_PORT: "8081"
     entrypoint: ["/opt/spark/bin/spark-class"]
     command: ["org.apache.spark.deploy.worker.Worker", "spark://geo-spark-master:7078"]
@@ -255,6 +303,10 @@ services:
 
   geo_fastapi:
     image: geo_fastapi:latest
+    mem_limit: ${GEO_API_MEM_LIMIT:-1g}
+    memswap_limit: ${GEO_API_MEM_LIMIT:-1g}
+    oom_score_adj: 500
+    logging: *default-logging
     build:
       context: ..
       dockerfile: GEO_E2E/docker/geo_fastapi/Dockerfile
@@ -274,6 +326,10 @@ services:
 
   geo_react_app:
     image: geo_react_app:latest
+    mem_limit: ${GEO_APP_MEM_LIMIT:-128m}
+    memswap_limit: ${GEO_APP_MEM_LIMIT:-128m}
+    oom_score_adj: 500
+    logging: *default-logging
     build:
       context: ..
       dockerfile: GEO_E2E/docker/geo_react_app/Dockerfile

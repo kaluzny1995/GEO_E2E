@@ -13,8 +13,11 @@ FROM continuumio/anaconda3:${ANACONDA_TAG}
 
 SHELL ["/bin/bash", "-lc"]
 
+ENV CONDA_SOLVER=libmamba \
+    PIP_NO_CACHE_DIR=1
+
 COPY GEO_E2E/docker/geo_fastapi/environment.yml /tmp/geo-api-environment.yml
-RUN conda env create -f /tmp/geo-api-environment.yml \
+RUN conda env create --solver=libmamba -f /tmp/geo-api-environment.yml \
     && conda clean --all --yes \
     && rm -f /tmp/geo-api-environment.yml
 

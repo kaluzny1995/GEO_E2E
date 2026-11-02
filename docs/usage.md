@@ -9,15 +9,21 @@
 Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-docker compose up -d --build
+./build-images.sh     # serial builds; safer on a laptop
+docker compose up -d
 ```
+
+`docker compose up -d --build` works too, but builds independent images in parallel and can spike RAM on the first run.
 
 This builds the three images (first run only) and starts the one-shot `airflow-init` (Supabase schema creation, DB migration, admin user, pool seeding, `.env` refresh), the DAG processor, the scheduler, the API server, the DAG activation job, the Spark cluster, GEO_API and GEO_APP. Follow the scheduler to watch task execution:
 
 ```bash
 docker compose logs -f airflow-scheduler
 docker compose ps
+docker stats --no-stream     # every container stays inside its memory limit
 ```
+
+> On a laptop build the images serially with `./build-images.sh` instead of `docker compose build`; the Anaconda-based images can otherwise run two dependency solvers at once. See [README — Memory and resource limits](../README.md#3-memory-and-resource-limits).
 
 > The images are self-contained. Airflow task subprocesses use the image's `/opt/conda` environments and reach Spark at `spark://geo-spark-master:7078` over the Compose bridge network. The Spark UI is published at 8083; the Airflow UI at 8090. See [README — Dockerizing the solution](../README.md#2-build-and-start-the-stack).
 
@@ -28,9 +34,11 @@ docker compose build                 # rebuild changed images
 docker compose up -d                 # recreate containers
 ```
 
-`docker compose restart` does not rebuild an image. See [README — Rebuilding](../README.md#4-rebuilding-after-repository-changes).
+Use `./build-images.sh` when RAM is tight (serial builds). `docker compose restart` does not rebuild an image. See [README — Rebuilding](../README.md#5-rebuilding-after-repository-changes).
 
 > **Troubleshooting — services crash-looping with `ModuleNotFoundError: No module named 'airflow'`:** this comes from the entrypoint's `airflow db check` when `docker-compose.yaml` sets `HOME: /opt/airflow`. The `airflow` console script resolves its packages through the *HOME* user-site, while the image installs Airflow in `/home/airflow/.local`; the entrypoint only self-corrects `HOME` on a container's **first** start (when its uid is still missing from `/etc/passwd`), so every *restarted* service dies. Do not add a `HOME` override to the compose services — `AIRFLOW_HOME: /opt/airflow` alone keeps data/logs on the volume (see the comment in `docker-compose.yaml`).
+
+> **Troubleshooting — the host froze or became unresponsive:** this stack used to run Airflow's `LocalExecutor` at its default 32 workers and had no container memory limits, so a PySpark driver or conda task could exhaust host RAM. The current Compose file caps every service and sets `memswap_limit` equal to `mem_limit`. If it still happens: run `docker stats --no-stream` to find the container, lower `AIRFLOW_SCHEDULER_MEM_LIMIT` / `SPARK_WORKER_MEM_LIMIT` / `AIRFLOW_PARALLELISM` in `.env`, and `docker compose down` when the pipeline is idle. The first Anaconda build is the other peak — use `./build-images.sh`.
 
 ## The web UI
 
