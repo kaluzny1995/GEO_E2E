@@ -12,9 +12,10 @@ set -euo pipefail
 cd /opt/geo/GEO_E2E
 GEO_DOCKER=1 ./setup.sh --force
 
-# airflow-init runs as root; the service containers run as uid 50000. setup.sh's sibling
-# sync replaces GEO_ETL/.env via mv, so explicitly restore the runtime owner.
+# airflow-init runs as root; the service containers run as AIRFLOW_UID (the host user) with
+# gid 0. setup.sh's sibling sync replaces GEO_ETL/.env via mv, so explicitly restore the
+# runtime owner when this script runs as root.
 if [[ "$(id -u)" -eq 0 ]]; then
-    chown 50000:0 /opt/geo/GEO_E2E/.env /opt/geo/GEO_ETL/.env 2>/dev/null || true
+    chown "${AIRFLOW_UID:-50000}:0" /opt/geo/GEO_E2E/.env /opt/geo/GEO_ETL/.env 2>/dev/null || true
     chmod 600 /opt/geo/GEO_E2E/.env /opt/geo/GEO_ETL/.env 2>/dev/null || true
 fi

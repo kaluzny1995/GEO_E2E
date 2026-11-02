@@ -7,8 +7,9 @@
 #   * Apache Spark 3.5.5 at /opt/spark (PostgreSQL JDBC + spark-monitor JARs)
 #   * the runtime files of GEO_E2E, GEO_Download and GEO_ETL under /opt/geo
 #
-# The image is self-contained: no host conda, no host project bind mounts. Rebuilding
-# after a source change is therefore just `docker compose build` / `up --build`.
+# The image is self-contained: no host conda, no host source bind mounts. The data folder
+# is the one host bind mount (Compose mounts GEO_Download/data into the containers).
+# Rebuilding after a source change is therefore just `docker compose build` / `up --build`.
 
 ARG AIRFLOW_VERSION=3.3.2
 ARG PYTHON_VERSION=3.11
@@ -134,10 +135,14 @@ RUN pip install --no-cache-dir \
 
 # Generate the in-image .env with container paths (no host paths, no host conda).
 # airflow-init re-runs this at startup to inject the credentials supplied by Compose.
+# The service containers run as the host UID (AIRFLOW_UID) with gid 0, so the .env files
+# and their parent directories must be writable by group 0: each container refreshes its
+# own copy of these files on startup.
 RUN cd /opt/geo/GEO_E2E \
     && GEO_DOCKER=1 ./setup.sh --force \
     && touch /opt/geo/GEO_ETL/.env \
-    && chmod 600 /opt/geo/GEO_E2E/.env /opt/geo/GEO_ETL/.env
+    && chmod 775 /opt/geo/GEO_E2E /opt/geo/GEO_Download /opt/geo/GEO_ETL \
+    && chmod 664 /opt/geo/GEO_E2E/.env /opt/geo/GEO_ETL/.env
 
 USER airflow
 

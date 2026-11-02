@@ -309,6 +309,12 @@ The runtime knobs live in the `dag` block of `config.json`, loaded via pydantic 
 
 You can inspect the pools under **Admin → Pools** or via `docker compose run --rm airflow-cli pools list`. The DAG itself is created unpaused (`dags_are_paused_at_creation=false` in `docker-compose.yaml`; `airflow-dag-activate` also repairs an already-paused DAG).
 
+## Data folder and runtime UID (`.env`)
+
+`GEO_DATA_DIR` is the host folder bind-mounted at `/opt/geo/GEO_Download/data` in the Airflow and Spark containers. `./setup.sh` writes the absolute path into `.env`; the manual `.env.example` uses the relative `../GEO_Download/data`. This folder is the single source of truth for the downloaded CSVs and reference lookups, so keep it when editing `.env` by hand.
+
+`AIRFLOW_UID` is the host UID the Airflow containers run as. Downloads therefore create files owned by that user, and the same UID is used by `airflow-init` when it prepares `/opt/airflow` and the bind-mounted data folder. `./setup.sh` detects it automatically; the manual template uses `1000`.
+
 ## Supabase metadata DB (`.env`)
 
 Airflow's metadata DB, GEO_ETL's JDBC writes and GEO_API's queries all use the **Supabase** Postgres of the GEO_ETL project — there is no local Postgres container. `docker-compose.yaml` assembles Airflow's connection from the five variables in the git-ignored `.env` (template: `.env.example`).

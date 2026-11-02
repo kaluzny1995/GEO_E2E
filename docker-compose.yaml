@@ -1,4 +1,5 @@
-# Self-contained GEO E2E stack — three images, no host conda, no host project bind mounts.
+# Self-contained GEO E2E stack — three images, no host conda, no host source bind mounts.
+# The only host mount is the GEO_Download/data folder (GEO_DATA_DIR), shared by Airflow and Spark.
 #
 #   geo_airflow_spark  Airflow 3.3.2 + Spark 3.5.5 + Anaconda + GEO_E2E/GEO_Download/GEO_ETL
 #   geo_fastapi        GEO_API + Anaconda (geo_api_311)
@@ -74,6 +75,14 @@ x-airflow-common: &airflow-common
     # image's /home/airflow user-site. AIRFLOW_HOME alone pins data/logs to the volume.
     CONDA_ROOT: /opt/conda
     GEO_DOCKER: "1"
+    # UID the Airflow containers run as. setup.sh writes the host user's UID here so files
+    # written into the bind-mounted data folder stay owned by that user; airflow-init runs
+    # as root and uses the same value when it prepares the Airflow home volume.
+    AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+    # Airflow resolves the runtime user from the environment (the host UID has no passwd
+    # entry inside the image). Without these, CLI commands fail with "no username".
+    USER: airflow
+    LOGNAME: airflow
     # GEO_ETL's Spark driver connects to the master by Compose DNS name.
     SPARK_MASTER_URL: spark://geo-spark-master:7078
     # Driver/executor memory caps read by GEO_ETL's AppConfig. A driver runs inside the
@@ -86,10 +95,13 @@ x-airflow-common: &airflow-common
     SPARK_MAX_RESULT_SIZE: ${SPARK_MAX_RESULT_SIZE:-256m}
   volumes:
     - airflow_data:/opt/airflow
-    - geo_data:/opt/geo/GEO_Download/data
+    # The host data folder is the single source of truth for the host, Airflow and Spark.
+    # A bind mount (not a named volume) keeps the local GEO_Download/data folder in sync
+    # with what the containers read and write.
+    - "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data"
   # Refresh this container's in-image .env files from Compose, then run Airflow.
   entrypoint: ["/opt/geo/bin/airflow-entrypoint.sh"]
-  user: "50000:0"
+  user: "${AIRFLOW_UID:-50000}:0"
   networks:
     - geo_network
 
@@ -109,7 +121,11 @@ services:
       - |
         set -euo pipefail
         mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins /opt/airflow/config
-        chown -R "50000:0" /opt/airflow/
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
+        # The host data folder is bind-mounted here. Docker creates a missing host path as
+        # root, so make sure the runtime user owns the mount point before downloads start.
+        mkdir -p /opt/geo/GEO_Download/data
+        chown "${AIRFLOW_UID:-50000}:0" /opt/geo/GEO_Download/data
         # Write .env from the Compose-provided credentials (no secrets in image layers).
         /opt/geo/bin/refresh-env.sh
         # Create the Supabase schema first — the connection pins search_path to it, and
@@ -119,7 +135,7 @@ services:
         # Seed the concurrency pools from config.json (`dag.pool_slots`; idempotent).
         unset _AIRFLOW_DB_MIGRATE _AIRFLOW_WWW_USER_CREATE
         python /opt/geo/GEO_E2E/docker/airflow/seed_pools.py
-        chown -R "50000:0" /opt/airflow/
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: "true"
@@ -197,7 +213,10 @@ services:
       - |
         set -euo pipefail
         for _ in $(seq 1 60); do
-            if airflow dags unpause geo_pipeline 2>/dev/null; then
+            # `python -m airflow` rather than the console script: this service bypasses
+            # /entrypoint, so HOME is not /home/airflow and the console script cannot
+            # resolve the user-site packages when the container runs as the host UID.
+            if python -m airflow dags unpause geo_pipeline 2>/dev/null; then
                 echo "geo_pipeline is active"
                 exit 0
             fi
@@ -213,8 +232,10 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-    # `docker compose run --rm airflow-cli dags list` -> `airflow dags list`
-    entrypoint: ["airflow"]
+    # `docker compose run --rm airflow-cli dags list` -> `airflow dags list`.
+    # `python -m airflow` keeps the CLI working when this service bypasses /entrypoint
+    # and the container runs as the host UID (HOME is not /home/airflow).
+    entrypoint: ["python", "-m", "airflow"]
     command: ["--help"]
 
   geo-spark-master:
@@ -233,7 +254,7 @@ services:
       - "${SPARK_MASTER_PORT_HOST:-7078}:7078"
       - "${SPARK_MASTER_UI_HOST_PORT:-8083}:8083"
     volumes:
-      - geo_data:/opt/geo/GEO_Download/data:ro
+      - "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data:ro"
     networks:
       - geo_network
     healthcheck:
@@ -262,7 +283,7 @@ services:
     ports:
       - "${SPARK_WORKER_1_UI_HOST_PORT:-8084}:8081"
     volumes:
-      - geo_data:/opt/geo/GEO_Download/data:ro
+      - "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data:ro"
     networks:
       - geo_network
     healthcheck:
@@ -290,7 +311,7 @@ services:
     ports:
       - "${SPARK_WORKER_2_UI_HOST_PORT:-8085}:8081"
     volumes:
-      - geo_data:/opt/geo/GEO_Download/data:ro
+      - "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data:ro"
     networks:
       - geo_network
     healthcheck:
@@ -346,7 +367,9 @@ services:
 
 volumes:
   airflow_data:
-  geo_data:
+  # geo_data is intentionally no longer declared: the host GEO_Download/data folder is
+  # bind-mounted into Airflow and Spark above. The old named volume is left untouched
+  # (not deleted), so its files remain available if they are ever needed.
   geo_api_logs:
 
 networks:

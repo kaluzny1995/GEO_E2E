@@ -208,6 +208,8 @@ else
     AIRFLOW_UID="$(id -u)"
 fi
 GEO_DATA_DIR="$GEO_ROOT/GEO_Download/data"
+# The data folder is bind-mounted into the containers, so it must exist before Compose starts.
+mkdir -p "$GEO_DATA_DIR"
 USERNAME="$(prompt "${_AIRFLOW_WWW_USER_USERNAME:-$(previous_value _AIRFLOW_WWW_USER_USERNAME)}" "Airflow UI login (_AIRFLOW_WWW_USER_USERNAME)")"
 USERNAME="${USERNAME:-airflow_admin}"
 PASSWORD="$(prompt "${_AIRFLOW_WWW_USER_PASSWORD:-$(previous_value _AIRFLOW_WWW_USER_PASSWORD)}" "Airflow UI password (_AIRFLOW_WWW_USER_PASSWORD)")"
@@ -234,7 +236,7 @@ cat > "$PROJECT_DIR/$ENV_FILE" <<EOF
 
 # Parent dir of the sibling projects (GEO_Download, GEO_E2E, GEO_ETL)
 GEO_ROOT=$GEO_ROOT
-# Data folder shared with the Spark containers (named geo_data volume in Docker Compose)
+# Data folder bind-mounted into Airflow and Spark as /opt/geo/GEO_Download/data
 GEO_DATA_DIR=$GEO_DATA_DIR
 $CONDA_COMMENT
 CONDA_ROOT=$CONDA_ROOT

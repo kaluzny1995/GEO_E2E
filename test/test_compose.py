@@ -38,14 +38,34 @@ def test_three_images_and_dockerfiles_exist() -> None:
         assert f"dockerfile: GEO_E2E/docker/{image}/Dockerfile" in _COMPOSE, image
 
 
-def test_no_host_bind_mounts_or_host_conda_left_in_compose() -> None:
-    """The images are self-contained: no host project, host conda or host data mounts."""
+def test_data_folder_is_host_bind_mounted_and_host_conda_is_gone() -> None:
+    """The data folder is the one host bind mount; source code and conda stay in the image."""
     assert "network_mode: host" not in _COMPOSE
     assert "CONDA_ROOT: ${CONDA_ROOT" not in _COMPOSE
     assert "${GEO_ROOT" not in _COMPOSE
-    assert "${GEO_DATA_DIR" not in _COMPOSE
-    assert "geo_data:/opt/geo/GEO_Download/data" in _COMPOSE
+    # The host data folder — not a named volume — is mounted into Airflow and Spark.
+    assert "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data" in _COMPOSE
+    assert "geo_data:/opt/geo/GEO_Download/data" not in _COMPOSE
     assert "airflow_data:/opt/airflow" in _COMPOSE
+
+
+def test_airflow_runs_as_host_uid_and_prepares_the_data_mount() -> None:
+    """Airflow runs as the host UID so downloads stay owned by the user; init prepares the mount."""
+    assert 'user: "${AIRFLOW_UID:-50000}:0"' in _COMPOSE
+    assert "AIRFLOW_UID: ${AIRFLOW_UID:-50000}" in _COMPOSE
+    assert "USER: airflow" in _COMPOSE
+    assert "LOGNAME: airflow" in _COMPOSE
+    assert 'chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/' in _COMPOSE
+    assert 'chown "${AIRFLOW_UID:-50000}:0" /opt/geo/GEO_Download/data' in _COMPOSE
+    # Services that bypass /entrypoint have no /home/airflow HOME; use the module entrypoint.
+    assert "if python -m airflow dags unpause geo_pipeline" in _COMPOSE
+    assert 'entrypoint: ["python", "-m", "airflow"]' in _COMPOSE
+
+
+def test_env_example_documents_the_data_mount_and_uid() -> None:
+    """A manual .env carries the host data path and the UID used for bind-mounted writes."""
+    assert "GEO_DATA_DIR=../GEO_Download/data" in _ENV_EXAMPLE
+    assert "AIRFLOW_UID=1000" in _ENV_EXAMPLE
 
 
 def test_metadata_db_is_built_from_the_supabase_env_vars() -> None:
@@ -132,6 +152,15 @@ def test_container_startup_refreshes_env_from_compose() -> None:
     assert "GEO_DOCKER=1" in (_DOCKER / "geo_airflow_spark" / "refresh-env.sh").read_text()
     assert "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD" in (_DOCKER / "geo_fastapi" / "entrypoint.sh").read_text()
     assert "entrypoint.sh" in fastapi_dockerfile
+
+
+def test_image_env_files_are_writable_by_the_host_uid_group() -> None:
+    """Every Airflow container refreshes its own .env, so the image files must allow uid:0 writes."""
+    airflow_dockerfile = IMAGES["geo_airflow_spark"].read_text()
+    assert "chmod 775 /opt/geo/GEO_E2E /opt/geo/GEO_Download /opt/geo/GEO_ETL" in airflow_dockerfile
+    assert "chmod 664 /opt/geo/GEO_E2E/.env /opt/geo/GEO_ETL/.env" in airflow_dockerfile
+    refresh = (_DOCKER / "geo_airflow_spark" / "refresh-env.sh").read_text()
+    assert 'chown "${AIRFLOW_UID:-50000}:0"' in refresh
 
 
 def test_container_dependencies() -> None:

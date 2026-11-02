@@ -59,7 +59,7 @@ GEO_E2E/
 | `util.py` | `get_memory_info()` and `log_memory_usage()` — used as `on_success_callback` / `on_failure_callback` of every task |
 | `config.json` | Command templates for `DOWNLOAD`/`INGESTION`/`DATA_QUALITY`/`SINGLE_ETL`/`VIEW` (folder, script, conda env) |
 | `jobs.json` | Flat job list — one object per job (`name`, `job_type`, `next_jobs` as name references) — plus the `Union` job |
-| `docker-compose.yaml` | Three images (`geo_airflow_spark`, `geo_fastapi`, `geo_react_app`), bridge network, named volumes; Airflow UI on 8090, Spark UI on 8083, API on 8000, app on 3000; every service has a hard `mem_limit`/`memswap_limit` and capped Airflow/Spark concurrency |
+| `docker-compose.yaml` | Three images (`geo_airflow_spark`, `geo_fastapi`, `geo_react_app`), bridge network, host data bind mount + named volumes; Airflow UI on 8090, Spark UI on 8083, API on 8000, app on 3000; every service has a hard `mem_limit`/`memswap_limit` and capped Airflow/Spark concurrency |
 | `setup.sh` | Host mode writes the git-ignored `.env` (paths, login, Supabase credentials); `GEO_DOCKER=1` writes the same file with container paths (`/opt/geo`, `/opt/conda`) and reads credentials from the environment. Mirrors `SUPABASE_DB_*` into `../GEO_ETL/.env` and `../GEO_API/.env` |
 | `build-images.sh` | Builds `geo_airflow_spark`, `geo_fastapi` and `geo_react_app` one at a time so the Anaconda solver does not run twice in parallel |
 | `docker/geo_airflow_spark/Dockerfile` | Airflow 3.3.2 + Anaconda + the three conda envs + Spark 3.5.5 + runtime GEO_E2E/GEO_Download/GEO_ETL files under `/opt/geo` |
@@ -77,7 +77,7 @@ GEO_E2E/
 | `geo_fastapi` | `geo_fastapi` | GEO_API, Anaconda + `geo_api_311`, uvicorn on 8000 |
 | `geo_react_app` | `geo_react_app` | compiled Vite app, nginx on 80 (published as 3000) |
 
-Dependencies: Airflow → Supabase + Spark + `geo_data`; FastAPI → Supabase; React → FastAPI healthy; Spark workers → Spark master. Airflow and Spark share the `geo_data` named volume, so a CSV written by a download task is visible to every executor without host bind mounts.
+Dependencies: Airflow → Supabase + Spark + the host data folder; FastAPI → Supabase; React → FastAPI healthy; Spark workers → Spark master. Airflow and Spark share the host `GEO_Download/data` folder through a bind mount (`GEO_DATA_DIR`), so a CSV written by a download task is visible to every executor and to the host immediately.
 
 ### Resource isolation
 

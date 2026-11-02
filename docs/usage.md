@@ -25,7 +25,7 @@ docker stats --no-stream     # every container stays inside its memory limit
 
 > On a laptop build the images serially with `./build-images.sh` instead of `docker compose build`; the Anaconda-based images can otherwise run two dependency solvers at once. See [README — Memory and resource limits](../README.md#3-memory-and-resource-limits).
 
-> The images are self-contained. Airflow task subprocesses use the image's `/opt/conda` environments and reach Spark at `spark://geo-spark-master:7078` over the Compose bridge network. The Spark UI is published at 8083; the Airflow UI at 8090. See [README — Dockerizing the solution](../README.md#2-build-and-start-the-stack).
+> The images are self-contained. Airflow task subprocesses use the image's `/opt/conda` environments and reach Spark at `spark://geo-spark-master:7078` over the Compose bridge network. The Spark UI is published at 8083; the Airflow UI at 8090. The host `GEO_Download/data` folder is bind-mounted at `/opt/geo/GEO_Download/data`, so downloaded CSVs are immediately visible in the local repo. See [README — Dockerizing the solution](../README.md#2-build-and-start-the-stack).
 
 ### Rebuild after a repository change
 

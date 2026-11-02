@@ -232,6 +232,8 @@ if (-not (Test-Path -LiteralPath $condaRoot)) {
 }
 
 $geoDataDir = Join-Path (Join-Path $geoRoot 'GEO_Download') 'data'
+# The data folder is bind-mounted into the containers, so it must exist before Compose starts.
+New-Item -ItemType Directory -Force -Path $geoDataDir | Out-Null
 $defaultUser = Get-EnvValue '_AIRFLOW_WWW_USER_USERNAME'
 if (-not $defaultUser) { $defaultUser = Get-PreviousValue '_AIRFLOW_WWW_USER_USERNAME' }
 if (-not $defaultUser) { $defaultUser = 'airflow_admin' }
@@ -279,7 +281,7 @@ $content = @"
 
 # Parent dir of the sibling projects (GEO_Download, GEO_E2E, GEO_ETL)
 GEO_ROOT=$geoRoot
-# Data folder shared with the Spark containers (named geo_data volume in Docker Compose)
+# Data folder bind-mounted into Airflow and Spark as /opt/geo/GEO_Download/data
 GEO_DATA_DIR=$geoDataDir
 $condaComment
 CONDA_ROOT=$condaRoot

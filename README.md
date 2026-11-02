@@ -20,7 +20,7 @@ The system runs as three Docker images:
 2. **`geo_fastapi`** — GEO_API served by uvicorn, with Anaconda and the `geo_api_311` environment.
 3. **`geo_react_app`** — the compiled React dashboard served by nginx.
 
-The images are self-contained: no host conda or host project bind mounts. Airflow's metadata lives in the **Supabase** Postgres database — the `geo_airflow` schema of the project configured in `.env` (no local database container); concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
+The images are self-contained: no host conda or host source bind mounts. The only host bind mount is the `GEO_Download/data` folder (see [Data, logs and volumes](#6-data-logs-and-volumes)), which keeps downloaded CSVs visible on the host and shared by Airflow and Spark. Airflow's metadata lives in the **Supabase** Postgres database — the `geo_airflow` schema of the project configured in `.env` (no local database container); concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
 
 ## Features
 
@@ -235,7 +235,7 @@ Container dependencies:
 - `airflow-init`, `airflow-scheduler`, `airflow-dag-processor` and `airflow-api-server` → **Supabase** (metadata DB).
 - `airflow-scheduler` → `airflow-init` completed + Spark master healthy + both workers started.
 - Spark workers → Spark master.
-- Airflow + Spark → the shared `geo_data` volume (`/opt/geo/GEO_Download/data`); Airflow downloads CSV files, Spark executors read them.
+- Airflow + Spark → the host `GEO_Download/data` folder bind-mounted at `/opt/geo/GEO_Download/data`; Airflow downloads CSV files, Spark executors read them.
 - `geo_fastapi` → **Supabase** (read-only queries).
 - `geo_react_app` → `geo_fastapi` healthy. The browser then calls the API at `VITE_API_BASE` (default `http://localhost:8000`).
 
@@ -275,13 +275,18 @@ three builds serially, keeping only one conda solver alive at a time.
 
 ### 6. Data, logs and volumes
 
-| Volume | Mount | Persists |
-|--------|-------|----------|
-| `geo_data` | `/opt/geo/GEO_Download/data` in Airflow + Spark containers | downloaded CSV files and reference lookups |
-| `airflow_data` | `/opt/airflow` | Airflow logs and runtime data |
-| `geo_api_logs` | `/opt/geo/GEO_API/logs` | per-endpoint API logs |
+| Mount | Host path / volume | Persists |
+|-------|--------------------|----------|
+| `/opt/geo/GEO_Download/data` | `GEO_DATA_DIR` (`../GEO_Download/data` by default) | downloaded CSV files and reference lookups |
+| `airflow_data` | named volume | Airflow logs and runtime data |
+| `geo_api_logs` | named volume | per-endpoint API logs |
 
-The `geo_data` volume is seeded from the image's `GEO_Download/data` directory on first use and then survives rebuilds and `docker compose down`. `docker compose down -v` deletes all three volumes (and the data).
+`GEO_Download/data` is the single source of truth: it is bind-mounted into the Airflow and
+Spark containers, so a CSV written by a download task is immediately visible on the host and
+to every Spark executor. `./setup.sh` writes the absolute `GEO_DATA_DIR` into `.env`; the
+manual `.env.example` uses the relative `../GEO_Download/data`. The old `geo_data` named
+volume is no longer used and is left untouched (not deleted); `docker compose down -v`
+removes only the remaining named volumes, never the host data folder.
 
 ### 7. Pools and schedule are automatic
 
@@ -307,7 +312,7 @@ conda env create -f ../GEO_ETL/environment.yml        # geo_etl_311
 ./setup.sh                                            # writes host paths + credentials into .env
 ```
 
-The extra `GEO_ROOT`, `GEO_DATA_DIR`, `CONDA_ROOT` and `AIRFLOW_UID` values written by `setup.sh` are used by local runs; the Docker Compose stack ignores them. Tests and linting stay local:
+`GEO_DATA_DIR` and `AIRFLOW_UID` are read by Docker Compose (the data bind mount and the runtime UID); `GEO_ROOT` and `CONDA_ROOT` are used only by local runs. Tests and linting stay local:
 
 ```bash
 tox
@@ -325,7 +330,7 @@ GeographicData/
 │   ├── run_download.py
 │   ├── config.json
 │   ├── downloader/ model/
-│   └── data/               # seeded into the geo_data named volume
+│   └── data/               # bind-mounted into Airflow + Spark (GEO_DATA_DIR)
 ├── GEO_E2E/                # orchestrator + Compose + image definitions
 │   ├── docker-compose.yaml
 │   ├── .env.example        # Docker credentials template (committed)
