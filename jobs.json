@@ -7,7 +7,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-usgs_earthquake"
+      "INGESTION-usgs_earthquake",
+      "DATA_SOURCE_FILE-USGS_Earthquake"
     ]
   },
   {
@@ -59,7 +60,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-gdacs_event"
+      "INGESTION-gdacs_event",
+      "DATA_SOURCE_FILE-GDACS"
     ]
   },
   {
@@ -111,7 +113,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-eonet_event"
+      "INGESTION-eonet_event",
+      "DATA_SOURCE_FILE-EONET"
     ]
   },
   {
@@ -163,7 +166,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-openmeteo_flood"
+      "INGESTION-openmeteo_flood",
+      "DATA_SOURCE_FILE-OpenMeteo_Flood"
     ]
   },
   {
@@ -215,7 +219,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-usgs_nwis"
+      "INGESTION-usgs_nwis",
+      "DATA_SOURCE_FILE-USGS_NWIS"
     ]
   },
   {
@@ -267,7 +272,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-avalanche_org"
+      "INGESTION-avalanche_org",
+      "DATA_SOURCE_FILE-Avalanche_ORG"
     ]
   },
   {
@@ -319,7 +325,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-ibtracs_cyclone"
+      "INGESTION-ibtracs_cyclone",
+      "DATA_SOURCE_FILE-IBTrACS"
     ]
   },
   {
@@ -371,7 +378,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-usgs_volcano"
+      "INGESTION-usgs_volcano",
+      "DATA_SOURCE_FILE-USGS_Volcano"
     ]
   },
   {
@@ -423,7 +431,8 @@
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
     "next_jobs": [
-      "INGESTION-nifc_fire"
+      "INGESTION-nifc_fire",
+      "DATA_SOURCE_FILE-NIFC"
     ]
   },
   {
@@ -654,6 +663,87 @@
     "source_name": "Union",
     "job_type": "VIEW",
     "table_name": "phenomenons_waters_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-USGS_Earthquake",
+    "task_id": "USGS_Earthquake.data_source_file",
+    "source_name": "USGS_Earthquake",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "USGS_Earthquake",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-GDACS",
+    "task_id": "GDACS.data_source_file",
+    "source_name": "GDACS",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "GDACS",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-EONET",
+    "task_id": "EONET.data_source_file",
+    "source_name": "EONET",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "EONET",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-OpenMeteo_Flood",
+    "task_id": "OpenMeteo_Flood.data_source_file",
+    "source_name": "OpenMeteo_Flood",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "OpenMeteo_Flood",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-USGS_NWIS",
+    "task_id": "USGS_NWIS.data_source_file",
+    "source_name": "USGS_NWIS",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "USGS_NWIS",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-Avalanche_ORG",
+    "task_id": "Avalanche_ORG.data_source_file",
+    "source_name": "Avalanche_ORG",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "Avalanche_ORG",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-IBTrACS",
+    "task_id": "IBTrACS.data_source_file",
+    "source_name": "IBTrACS",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "IBTrACS",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-USGS_Volcano",
+    "task_id": "USGS_Volcano.data_source_file",
+    "source_name": "USGS_Volcano",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "USGS_Volcano",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-NIFC",
+    "task_id": "NIFC.data_source_file",
+    "source_name": "NIFC",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "NIFC",
     "is_next_skipped_if_error": true,
     "next_jobs": []
   }

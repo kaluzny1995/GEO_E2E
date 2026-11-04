@@ -20,7 +20,7 @@ def jobs_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _chain() -> list[dict]:
-    """A minimal DOWNLOAD -> INGESTION -> (DATA_QUALITY, SINGLE_ETL -> DATA_QUALITY) chain for NIFC."""
+    """A minimal DOWNLOAD -> (INGESTION -> DATA_QUALITY/SINGLE_ETL, DATA_SOURCE_FILE) chain for NIFC."""
     return [
         {
             "name": "DOWNLOAD-NIFC",
@@ -29,7 +29,7 @@ def _chain() -> list[dict]:
             "job_type": "DOWNLOAD",
             "schedule": CRON,
             "is_next_skipped_if_error": True,
-            "next_jobs": ["INGESTION-nifc_fire"],
+            "next_jobs": ["INGESTION-nifc_fire", "DATA_SOURCE_FILE-NIFC"],
         },
         {
             "name": "INGESTION-nifc_fire",
@@ -67,6 +67,15 @@ def _chain() -> list[dict]:
             "is_next_skipped_if_error": True,
             "next_jobs": [],
         },
+        {
+            "name": "DATA_SOURCE_FILE-NIFC",
+            "task_id": "NIFC.data_source_file",
+            "source_name": "NIFC",
+            "job_type": "DATA_SOURCE_FILE",
+            "table_name": "NIFC",
+            "is_next_skipped_if_error": True,
+            "next_jobs": [],
+        },
     ]
 
 
@@ -85,6 +94,7 @@ def test_load_jobs_preserves_order_and_fields(jobs_path: Path) -> None:
         "DATA_QUALITY-nifc_fire",
         "SINGLE_ETL-nifc_fire_etl",
         "DATA_QUALITY-nifc_fire_etl",
+        "DATA_SOURCE_FILE-NIFC",
     ]
     ingestion = jobs[1]
     assert ingestion.task_id == "NIFC.ingestion"
@@ -96,6 +106,10 @@ def test_load_jobs_preserves_order_and_fields(jobs_path: Path) -> None:
     assert ingestion.next_jobs == ["DATA_QUALITY-nifc_fire", "SINGLE_ETL-nifc_fire_etl"]
     assert jobs[0].table_name is None  # DOWNLOAD jobs carry no table_name
     assert jobs[0].schedule == CRON  # scheduled jobs declare their cron
+    assert jobs[0].next_jobs == ["INGESTION-nifc_fire", "DATA_SOURCE_FILE-NIFC"]
+    assert jobs[5].job_type == EJobType.DATA_SOURCE_FILE
+    assert jobs[5].table_name == "NIFC"
+    assert jobs[5].next_jobs == []
 
 
 def _add_cycle_pair(jobs: list[dict]) -> None:
@@ -244,19 +258,19 @@ def test_resolve_schedule_conflicting_crons_raises(jobs_path: Path) -> None:
 
 
 def test_jobs_json_shipped_registry_loads() -> None:
-    """The shipped jobs.json is a flat list of 64 uniquely named jobs."""
+    """The shipped jobs.json is a flat list of 73 uniquely named jobs."""
     # Arrange & Act
     jobs = load_jobs()
 
     # Assert
-    assert len(jobs) == 64
+    assert len(jobs) == 73
     names = [job.name for job in jobs]
     assert len(names) == len(set(names))
 
 
 def test_jobs_json_every_source_chains_ingestion_data_quality_and_single_etl() -> None:
-    """Every source's DOWNLOAD reaches its INGESTION job, which fans out to a DATA_QUALITY job
-    on the same table and a SINGLE_ETL job on <table>_etl (the Union job is not a source chain)."""
+    """Every source's DOWNLOAD fans out to INGESTION and DATA_SOURCE_FILE; INGESTION fans
+    out to a DATA_QUALITY job on the same table and a SINGLE_ETL job on <table>_etl."""
     # Arrange
     jobs = {raw["name"]: raw for raw in load_shipped_jobs()}
 
@@ -266,8 +280,10 @@ def test_jobs_json_every_source_chains_ingestion_data_quality_and_single_etl() -
     for download in downloads:
         source_name = download["source_name"]
 
-        (ingestion_name,) = download["next_jobs"]
+        assert len(download["next_jobs"]) == 2, source_name
+        ingestion_name, data_source_file_name = download["next_jobs"]
         ingestion = jobs[ingestion_name]
+        data_source_file = jobs[data_source_file_name]
 
         assert ingestion["job_type"] == "INGESTION", source_name
         assert len(ingestion["next_jobs"]) == 2, source_name
@@ -278,6 +294,10 @@ def test_jobs_json_every_source_chains_ingestion_data_quality_and_single_etl() -
         assert data_quality["job_type"] == "DATA_QUALITY", source_name
         assert data_quality["table_name"] == ingestion["table_name"], source_name
         assert data_quality["next_jobs"] == [], source_name
+
+        assert data_source_file["job_type"] == "DATA_SOURCE_FILE", source_name
+        assert data_source_file["table_name"] == source_name, source_name
+        assert data_source_file["next_jobs"] == [], source_name
 
         etl_table = f"{ingestion['table_name']}_etl"
         single_etl = jobs[single_etl_name]

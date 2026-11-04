@@ -69,6 +69,9 @@ def test_job_config_creation() -> None:
         download=JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py"),
         ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         data_quality=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
+        data_source_file=JobTypeConfig(
+            folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"
+        ),
         single_etl=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         view=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
     )
@@ -112,6 +115,11 @@ def test_get_job_config(tmp_path: Path) -> None:
                         "folder_name": "TestEtlFolder",
                         "python_script": "test_etl_script.py",
                         "conda_env": "test_dq_env",
+                    },
+                    "data_source_file": {
+                        "folder_name": "TestEtlFolder",
+                        "python_script": "test_etl_script.py",
+                        "conda_env": "test_dsf_env",
                     },
                     "single_etl": {
                         "folder_name": "TestEtlFolder",
@@ -159,6 +167,7 @@ def _dag_block() -> dict:
             "download": "download",
             "ingestion": "etl",
             "data_quality": "etl",
+            "data_source_file": "etl",
             "single_etl": "etl",
             "view": "etl",
             "verdict": "etl",

@@ -1,5 +1,6 @@
 # Self-contained GEO E2E stack — three images, no host conda, no host source bind mounts.
 # The only host mount is the GEO_Download/data folder (GEO_DATA_DIR), shared by Airflow and Spark.
+# GEO_API reads the CSV metadata from Supabase, which GEO_ETL publishes from the Spark side.
 #
 #   geo_airflow_spark  Airflow 3.3.2 + Spark 3.5.5 + Anaconda + GEO_E2E/GEO_Download/GEO_ETL
 #   geo_fastapi        GEO_API + Anaconda (geo_api_311)

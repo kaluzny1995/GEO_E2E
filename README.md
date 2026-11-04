@@ -4,13 +4,13 @@ GIS Data End-to-End Pipeline — an Apache Airflow-based orchestrator that runs 
 
 ## Overview
 
-GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it defines one Airflow DAG (`geo_pipeline`) whose tasks spawn subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality` (each run also refreshes that table's whole-table `overall` snapshot, so the pipelines need no separate `--overall` jobs), `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table.
+GEO_E2E is the orchestration layer in the GIS data pipeline. It does **not** download or transform data itself — instead, it defines one Airflow DAG (`geo_pipeline`) whose tasks spawn subprocesses that first execute `GEO_Download/run_download.py` and, once the download succeeds, then execute `GEO_ETL/run_etl.py INGESTION <table_name>` for the matching table, chained with `GEO_ETL/run_etl.py DATA_QUALITY <table_name>` to record per-`file_date` quality metrics in `geo.data_quality` (each run also refreshes that table's whole-table `overall` snapshot, so the pipelines need no separate `--overall` jobs), `GEO_ETL/run_etl.py SINGLE_ETL <table_name>_etl` to build the analytics-ready `_etl` table from the plain table, and a second `DATA_QUALITY <table_name>_etl` run to measure that etl table. The same download also releases `GEO_ETL/run_etl.py DATA_SOURCE_FILE <source_name>`, which publishes that source's CSV inventory to `geo.data_source_files`.
 
-A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `<source>.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The union chain then runs `DATA_QUALITY union_etl` to measure the freshly stacked table. Every DATA_QUALITY job is a terminal step of `jobs.json` — no job chains from it (like in the old Celery chains); only the verdict gate described below waits on it.
+A tenth job fans the sources back in: the `union_etl` task runs `GEO_ETL/run_etl.py SINGLE_ETL union_etl` to stack all nine `*_etl` tables into `geo.union_etl`. It waits for the `<source>.single_etl` task of **every** source — the nine `*_etl` producers — with Airflow's `all_done_min_one_success` trigger rule, so it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded (with zero successes the scheduler marks it `upstream_failed` without running it). The union chain then runs `DATA_QUALITY union_etl` to measure the freshly stacked table. Every DATA_QUALITY and DATA_SOURCE_FILE job is a terminal step of `jobs.json` — no job chains from it (like in the old Celery chains); only the verdict gate described below waits on it.
 
 Seventeen `VIEW` jobs hang off that same `union_etl` task — siblings of the union data-quality step, running in parallel with it: each runs `GEO_ETL/run_etl.py VIEW <view_name>` to (re)create one view over `geo.union_etl` (the `metrics_*_vw` and `phenomenons_*_vw` views of GEO_ETL), so the views always reflect the newest stack. They are terminal steps too — no job runs after them; the verdict gate waits on all of them.
 
-One task decides how the run itself is rated: the synthesized **verdict task** (`Union.verdict`) waits for every other task of the DAG (`all_done`) and reads `Union.single_etl`'s state of the run through the Airflow task SDK — it exits 0 only when the stack finished `success`. Airflow derives a run's success/failure from its *leaf* tasks, and the verdict is the DAG's only leaf (every other task waits for it), so the run is green iff the union stack succeeded: a failed download or source single-ETL still fails the run (the union root gets `upstream_failed`), while a failed `DATA_QUALITY` or `VIEW` task shows red as a task without turning the run red.
+One task decides how the run itself is rated: the synthesized **verdict task** (`Union.verdict`) waits for every other task of the DAG (`all_done`) and reads `Union.single_etl`'s state of the run through the Airflow task SDK — it exits 0 only when the stack finished `success`. Airflow derives a run's success/failure from its *leaf* tasks, and the verdict is the DAG's only leaf (every other task waits for it), so the run is green iff the union stack succeeded: a failed download or source single-ETL still fails the run (the union root gets `upstream_failed`), while a failed `DATA_QUALITY`, `DATA_SOURCE_FILE` or `VIEW` task shows red as a task without turning the run red.
 
 Each data source's jobs live in the flat `jobs.json` registry (one object per job; `next_jobs` references the dependent jobs by `name`, same pattern as E2EReddit). `model.build_task_specs()` validates the registry and resolves it into Airflow task specs, which `geo_dag.GEO_DAG` groups into ten code-level subDAGs — one `geo_dag.JobsSubDAG` per source chain plus the union chain — and renders into `BashOperator`s of the single mega-DAG (`geo_pipeline.py` is only its `@dag` wrapper), so dependencies are expressed as a real DAG instead of in-process recursion: a failed task skips its downstream jobs (`all_success` trigger rule), and a failure is visible as red/skipped in the Airflow UI (the old Celery setup reported the task SUCCESS even when the chain failed).
 
@@ -20,15 +20,15 @@ The system runs as three Docker images:
 2. **`geo_fastapi`** — GEO_API served by uvicorn, with Anaconda and the `geo_api_311` environment.
 3. **`geo_react_app`** — the compiled React dashboard served by nginx.
 
-The images are self-contained: no host conda or host source bind mounts. The only host bind mount is the `GEO_Download/data` folder (see [Data, logs and volumes](#6-data-logs-and-volumes)), which keeps downloaded CSVs visible on the host and shared by Airflow and Spark. Airflow's metadata lives in the **Supabase** Postgres database — the `geo_airflow` schema of the project configured in `.env` (no local database container); concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
+The images are self-contained: no host conda or host source bind mounts. The only host bind mount is the `GEO_Download/data` folder (see [Data, logs and volumes](#6-data-logs-and-volumes)), which keeps downloaded CSVs visible on the host and shared by Airflow and Spark. GEO_API reads the CSV inventory from Supabase (`geo.data_source_files`), which GEO_ETL publishes from the Spark side, so the API container does not mount the data folder. Airflow's metadata lives in the **Supabase** Postgres database — the `geo_airflow` schema of the project configured in `.env` (no local database container); concurrency is capped by two Airflow pools (`download` = 3 slots, `etl` = 2 slots). There is no message broker.
 
 ## Features
 
-- **Dependency-driven sequencing** — DOWNLOAD → INGESTION → (DATA_QUALITY, SINGLE_ETL → DATA_QUALITY) is expressed as DAG dependencies; no marker files, no polling.
+- **Dependency-driven sequencing** — DOWNLOAD → (INGESTION → (DATA_QUALITY, SINGLE_ETL → DATA_QUALITY), DATA_SOURCE_FILE) is expressed as DAG dependencies; no marker files, no polling.
 - **Web UI monitoring** — live grid/gantt/log view of every job at http://localhost:8090; failures show up as red tasks instead of hidden log warnings.
-- **Union fan-in with `all_done_min_one_success`** — the union job waits for all nine `<source>.single_etl` tasks to reach a terminal state (whatever their results) and runs only if at least one succeeded; no deadline fallback needed, and the DATA_QUALITY jobs stay terminal (no job chains from them).
+- **Union fan-in with `all_done_min_one_success`** — the union job waits for all nine `<source>.single_etl` tasks to reach a terminal state (whatever their results) and runs only if at least one succeeded; no deadline fallback needed, and the DATA_QUALITY / DATA_SOURCE_FILE jobs stay terminal (no job chains from them).
 - **Views after the stack** — the seventeen `VIEW` jobs wait for the `Union.single_etl` task with `all_success` and refresh the `metrics_*_vw` / `phenomenons_*_vw` views on the freshly stacked table.
-- **Union-only run state** — the synthesized `Union.verdict` leaf task waits for the whole DAG (`all_done`), reads `Union.single_etl`'s state and exits non-zero unless it succeeded — the run is rated by the union result alone, not by every one of the 65 tasks.
+- **Union-only run state** — the synthesized `Union.verdict` leaf task waits for the whole DAG (`all_done`), reads `Union.single_etl`'s state and exits non-zero unless it succeeded — the run is rated by the union result alone, not by every one of the 74 tasks.
 - **Failure gating** — a failed task skips everything chained below it (`all_success` trigger rule = the old `is_stop_if_error` semantics), siblings unaffected.
 - **Pools** — at most 3 concurrent downloads and 2 concurrent ETL/Spark jobs.
 - **Timeouts, no retries** — every task is killed after 30 minutes (old `task_time_limit`) and never retried.
@@ -52,7 +52,7 @@ flowchart TD
     H -->|terminal| H2[terminal branch]
     D -->|HTTP GET| I[USGS FDSN API]
     I -->|CSV| J[GEO_Download/run_download.py]
-    E -->|JDBC + Spark| K[GEO_ETL/run_etl.py INGESTION / DATA_QUALITY / SINGLE_ETL]
+    E -->|JDBC + Spark| K[GEO_ETL/run_etl.py INGESTION / DATA_QUALITY / DATA_SOURCE_FILE / SINGLE_ETL]
     U -->|JDBC + Spark| L[geo.union_etl]
     U -->|all_success| UQ[Union data quality]
     U -->|all_success| UV[17 Union views]
@@ -275,15 +275,17 @@ three builds serially, keeping only one conda solver alive at a time.
 
 ### 6. Data, logs and volumes
 
-| Mount | Host path / volume | Persists |
-|-------|--------------------|----------|
+| Mount | Host path / volume | Purpose |
+|-------|--------------------|---------|
 | `/opt/geo/GEO_Download/data` | `GEO_DATA_DIR` (`../GEO_Download/data` by default) | downloaded CSV files and reference lookups |
 | `airflow_data` | named volume | Airflow logs and runtime data |
 | `geo_api_logs` | named volume | per-endpoint API logs |
 
 `GEO_Download/data` is the single source of truth: it is bind-mounted into the Airflow and
 Spark containers, so a CSV written by a download task is immediately visible on the host and
-to every Spark executor. `./setup.sh` writes the absolute `GEO_DATA_DIR` into `.env`; the
+to every Spark executor. GEO_ETL's DATA_SOURCE_FILE job publishes the CSV inventory from the Spark
+side to `geo.data_source_files`; GEO_API reads that table, so the API container has no data
+mount. `./setup.sh` writes the absolute `GEO_DATA_DIR` into `.env`; the
 manual `.env.example` uses the relative `../GEO_Download/data`. The old `geo_data` named
 volume is no longer used and is left untouched (not deleted); `docker compose down -v`
 removes only the remaining named volumes, never the host data folder.
@@ -392,5 +394,5 @@ Configuration lives in `config.json` (command templates plus the `dag` block: re
 
 - **GEO_Download** — the actual data downloader that GEO_E2E schedules. Handles HTTP requests, CSV parsing, and file storage with historical/incremental modes.
 - **GEO_ETL** — PySpark ETL cluster for transforming the downloaded CSV data. Inside the Docker network it connects to the Spark master via `spark://geo-spark-master:7078` (`SPARK_MASTER_URL`); local runs keep `spark://localhost:7078`.
-- **GEO_API** — FastAPI data-sharing layer that serves the finished data (`/data-quality/...`, `/event-counts/...`) from the same Supabase project. Shares its five `SUPABASE_DB_*` credentials — in Docker they are injected from Compose; locally `./setup.sh` writes `../GEO_API/.env`.
-- **GEO_APP** — React dashboard that visualises what GEO_API returns (data quality, data quantity, event categories and locations). The container serves the compiled app on port 3000 and calls the API at `VITE_API_BASE` (default `http://localhost:8000`).
+- **GEO_API** — FastAPI data-sharing layer that serves the finished data (`/data-quality/...`, `/event-counts/...`) from the same Supabase project and serves the PySpark-published CSV inventory through `/data-source-files`. Shares its five `SUPABASE_DB_*` credentials — in Docker they are injected from Compose; locally `./setup.sh` writes `../GEO_API/.env`.
+- **GEO_APP** — React dashboard that visualises what GEO_API returns (data quality, data quantity, data source files, event categories and locations). The container serves the compiled app on port 3000 and calls the API at `VITE_API_BASE` (default `http://localhost:8000`).

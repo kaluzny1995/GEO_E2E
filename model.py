@@ -24,6 +24,7 @@ class EJobType(StrEnum):
     DOWNLOAD = "DOWNLOAD"
     INGESTION = "INGESTION"
     DATA_QUALITY = "DATA_QUALITY"
+    DATA_SOURCE_FILE = "DATA_SOURCE_FILE"
     SINGLE_ETL = "SINGLE_ETL"
     VIEW = "VIEW"
     # Not a jobs.json type — build_task_specs() synthesizes the verdict task with it
@@ -56,6 +57,7 @@ class JobConfig(BaseModel):
     download: JobTypeConfig
     ingestion: JobTypeConfig
     data_quality: JobTypeConfig
+    data_source_file: JobTypeConfig
     single_etl: JobTypeConfig
     view: JobTypeConfig
 
@@ -85,6 +87,7 @@ class PoolConfig(BaseModel):
     download: str
     ingestion: str
     data_quality: str
+    data_source_file: str
     single_etl: str
     view: str
     verdict: str
@@ -126,6 +129,7 @@ class DagSettings(BaseModel):
             EJobType.DOWNLOAD: self.pools.download,
             EJobType.INGESTION: self.pools.ingestion,
             EJobType.DATA_QUALITY: self.pools.data_quality,
+            EJobType.DATA_SOURCE_FILE: self.pools.data_source_file,
             EJobType.SINGLE_ETL: self.pools.single_etl,
             EJobType.VIEW: self.pools.view,
             EJobType.VERDICT: self.pools.verdict,
@@ -185,9 +189,10 @@ class Job(BaseModel):
         (cached per path — see `_read_job_config`).
 
         Raises:
-            ValueError: When a non-DOWNLOAD job (INGESTION, DATA_QUALITY, SINGLE_ETL or
-                VIEW) has no table_name configured in jobs.json, or when the job is a
-                VERDICT job (the verdict task is synthesized by build_task_specs()).
+            ValueError: When a non-DOWNLOAD job (INGESTION, DATA_QUALITY,
+                DATA_SOURCE_FILE, SINGLE_ETL or VIEW) has no table_name
+                configured in jobs.json, or when the job is a VERDICT job (the
+                verdict task is synthesized by build_task_specs()).
         """
         if self.job_type == EJobType.VERDICT:
             raise ValueError(
@@ -206,8 +211,9 @@ class Job(BaseModel):
                 f'{self.job_type.value} job for "{self.source_name}" has no table_name configured in jobs.json'
             )
 
-        # INGESTION / DATA_QUALITY / SINGLE_ETL / VIEW — every one's JobTypeConfig field of
-        # JobConfig is the lowercased job type (the VERDICT and DOWNLOAD cases are handled above)
+        # INGESTION / DATA_QUALITY / DATA_SOURCE_FILE / SINGLE_ETL / VIEW — every one's
+        # JobTypeConfig field of JobConfig is the lowercased job type (the VERDICT and
+        # DOWNLOAD cases are handled above)
         type_config: JobTypeConfig = getattr(job_config, self.job_type.value.lower())
         return type_config.get_command_string(self.job_type.value, self.table_name)
 

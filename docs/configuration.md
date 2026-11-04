@@ -24,6 +24,11 @@
       "python_script": "run_etl.py",
       "conda_env": "geo_etl_311"
     },
+    "data_source_file": {
+      "folder_name": "GEO_ETL",
+      "python_script": "run_etl.py",
+      "conda_env": "geo_etl_311"
+    },
     "single_etl": {
       "folder_name": "GEO_ETL",
       "python_script": "run_etl.py",
@@ -45,6 +50,7 @@ The `job` block defines **how** each job type is executed (command, folder, cond
 | `download`    | `GEO_Download` | `run_download.py` | `geo_download_311` |
 | `ingestion`   | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
 | `data_quality` | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
+| `data_source_file` | `GEO_ETL`  | `run_etl.py`    | `geo_etl_311`     |
 | `single_etl`  | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
 | `view`        | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
 
@@ -56,7 +62,7 @@ The `job` block defines **how** each job type is executed (command, folder, cond
 
 ## Job Registry (`jobs.json`)
 
-The flat registry of every job the pipeline runs — a JSON **array** of job objects, one per job, keyed relationships via `name` instead of nesting. Each source contributes a chain of five jobs (`DOWNLOAD` → `INGESTION` → `DATA_QUALITY` + `SINGLE_ETL` → etl-table `DATA_QUALITY`); the `Union` entry stacks the results and builds the views on top of them. The first source's jobs:
+The flat registry of every job the pipeline runs — a JSON **array** of job objects, one per job, keyed relationships via `name` instead of nesting. Each source contributes a chain of six jobs (`DOWNLOAD` → `INGESTION` → `DATA_QUALITY` + `SINGLE_ETL` → etl-table `DATA_QUALITY`, plus `DATA_SOURCE_FILE` released by the download); the `Union` entry stacks the results and builds the views on top of them. The first source's jobs:
 
 ```json
 [
@@ -67,7 +73,7 @@ The flat registry of every job the pipeline runs — a JSON **array** of job obj
     "job_type": "DOWNLOAD",
     "schedule": "0 8 * * *",
     "is_next_skipped_if_error": true,
-    "next_jobs": ["INGESTION-usgs_earthquake"]
+    "next_jobs": ["INGESTION-usgs_earthquake", "DATA_SOURCE_FILE-USGS_Earthquake"]
   },
   {
     "name": "INGESTION-usgs_earthquake",
@@ -92,7 +98,6 @@ The flat registry of every job the pipeline runs — a JSON **array** of job obj
     "task_id": "USGS_Earthquake.single_etl",
     "source_name": "USGS_Earthquake",
     "job_type": "SINGLE_ETL",
-    "notes": "among 9 single-ETL tasks; `openmeteo_flood_etl`, `usgs_nwis_etl`, `ibtracs_cyclone_etl` and `gdacs_event_etl` share the `state_province` transform via `utils.column_helpers.state_province`"
     "table_name": "usgs_earthquake_etl",
     "is_next_skipped_if_error": true,
     "next_jobs": ["DATA_QUALITY-usgs_earthquake_etl"]
@@ -105,6 +110,15 @@ The flat registry of every job the pipeline runs — a JSON **array** of job obj
     "table_name": "usgs_earthquake_etl",
     "is_next_skipped_if_error": true,
     "next_jobs": []
+  },
+  {
+    "name": "DATA_SOURCE_FILE-USGS_Earthquake",
+    "task_id": "USGS_Earthquake.data_source_file",
+    "source_name": "USGS_Earthquake",
+    "job_type": "DATA_SOURCE_FILE",
+    "table_name": "USGS_Earthquake",
+    "is_next_skipped_if_error": true,
+    "next_jobs": []
   }
 ]
 ```
@@ -114,8 +128,8 @@ The flat registry of every job the pipeline runs — a JSON **array** of job obj
 | `name`                    | Unique job id — the reference key other jobs use in `next_jobs` (convention: `<job_type>-<table_name>`, `DOWNLOAD-<source_name>` for downloads); **not** the Airflow task id |
 | `task_id`                 | Unique Airflow task id this job becomes (convention: `<source>.<step>`, e.g. `NIFC.single_etl`, `NIFC_etl.data_quality`, `View.<view_name>`); dot-separated segments of letters, digits and underscores — see [Task ids](#task-ids) |
 | `source_name`             | Data source this job belongs to; the chain root's value names the source (`NIFC`) and groups its tasks in the UI |
-| `job_type`                | `DOWNLOAD`, `INGESTION`, `DATA_QUALITY`, `SINGLE_ETL` or `VIEW` — selects the matching `job.*` command block (`VERDICT` is not declarable: `build_task_specs()` synthesizes that task itself) |
-| `table_name`              | Required for every job type except `DOWNLOAD` — argument passed to `run_etl.py <JOB_TYPE> <table>` (plain table name for `INGESTION`/`DATA_QUALITY`, `<table>_etl` for `SINGLE_ETL`, the view script name for `VIEW`; GEO_ETL adds `_raw` itself only for `INGESTION`); omitted for `DOWNLOAD` (the command takes the `source_name` instead) |
+| `job_type`                | `DOWNLOAD`, `INGESTION`, `DATA_QUALITY`, `DATA_SOURCE_FILE`, `SINGLE_ETL` or `VIEW` — selects the matching `job.*` command block (`VERDICT` is not declarable: `build_task_specs()` synthesizes that task itself) |
+| `table_name`              | Required for every job type except `DOWNLOAD` — argument passed to `run_etl.py <JOB_TYPE> <table>` (plain table name for `INGESTION`/`DATA_QUALITY`, the source folder name for `DATA_SOURCE_FILE`, `<table>_etl` for `SINGLE_ETL`, the view script name for `VIEW`; GEO_ETL adds `_raw` itself only for `INGESTION`); omitted for `DOWNLOAD` (the command takes the `source_name` instead) |
 | `schedule`                | Cron for a **scheduled** job — a pipeline root that starts on this cron (shipped: the nine `DOWNLOAD` jobs, all `0 8 * * *`). **Omit the field for downstreamed jobs** — they start when the job referencing them in `next_jobs` finishes |
 | `is_next_skipped_if_error`| **Documentation only** — marks that a failure skips the jobs named in `next_jobs`; the DAG always uses the `all_success` trigger rule below, which does exactly that |
 | `next_jobs`               | Names of the jobs that depend on this job — turned into downstream Airflow tasks (chains via references to any depth) |
@@ -139,6 +153,7 @@ Each job becomes one Airflow task whose id is its own `task_id` field in `jobs.j
 | chain root `DOWNLOAD` | `NIFC.download` |
 | `INGESTION` under it | `NIFC.ingestion` |
 | plain-table `DATA_QUALITY` | `NIFC.data_quality` |
+| `DATA_SOURCE_FILE` | `NIFC.data_source_file` |
 | `SINGLE_ETL` | `NIFC.single_etl` |
 | etl-table `DATA_QUALITY` | `NIFC_etl.data_quality` |
 | union fan-in | `Union.single_etl` |
@@ -184,7 +199,7 @@ Besides the nine source chains, `jobs.json` holds the `Union` entry — the fan-
 ]
 ```
 
-`SINGLE_ETL union_etl` stacks the nine `*_etl` tables into `geo.union_etl` (see [GEO_ETL — union_etl](../../GEO_ETL/docs/etl_jobs/single-etl.md#union_etl)); a non-zero exit — e.g. nothing newer to stack — fails the task (visible in the UI, re-runnable). The DAG gives the union root the `all_done_min_one_success` trigger rule and the nine `SINGLE_ETL` tasks (`NIFC.single_etl`, …) as upstreams: it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded; when all nine failed, the scheduler marks it `upstream_failed` without running it. No markers, no polling, no deadline. It is then followed by `DATA_QUALITY union_etl`, which measures `geo.union_etl` right after the stack. The DATA_QUALITY jobs are not part of the fan-in: they stay terminal steps of `jobs.json` (nothing chains from them — only the verdict gate waits), like in the old Celery chains.
+`SINGLE_ETL union_etl` stacks the nine `*_etl` tables into `geo.union_etl` (see [GEO_ETL — union_etl](../../GEO_ETL/docs/etl_jobs/single-etl/union-etl.md)); a non-zero exit — e.g. nothing newer to stack — fails the task (visible in the UI, re-runnable). The DAG gives the union root the `all_done_min_one_success` trigger rule and the nine `SINGLE_ETL` tasks (`NIFC.single_etl`, …) as upstreams: it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded; when all nine failed, the scheduler marks it `upstream_failed` without running it. No markers, no polling, no deadline. It is then followed by `DATA_QUALITY union_etl`, which measures `geo.union_etl` right after the stack. The DATA_QUALITY jobs are not part of the fan-in: they stay terminal steps of `jobs.json` (nothing chains from them — only the verdict gate waits), like in the old Celery chains.
 
 ### View step
 
@@ -195,6 +210,10 @@ Every `VIEW` job is chained under the union root (`SINGLE_ETL-union_etl.next_job
 Every table in the mapping below has **two** `DATA_QUALITY` jobs: one chained directly under its `INGESTION` job (measuring the plain table), and one under the `SINGLE_ETL` job (measuring the `<table>_etl` table). The plain-table metrics are therefore computed **only after the ingestion for that table finished successfully** — a failed or skipped ingestion means `run_etl.py DATA_QUALITY <table>` never runs (the metrics would otherwise be measured on stale data), and the etl-table metrics only after the `_etl` table was rebuilt. Since each job is the last step of its branch, a failure there stops that branch without affecting anything downstream.
 
 Both jobs run in the same conda env and folder as ingestion (see `job.data_quality` in `config.json`); GEO_ETL additionally writes its own `logs/data_quality/data_quality_<table>_<timestamp>.log` per run (see [Usage — Logs](usage.md#logs)). GEO_ETL picks its load type (`HISTORICAL` / `INCREMENTAL`) from the state of `geo.data_quality` — see [GEO_ETL — Data Quality job](../../GEO_ETL/docs/etl_jobs/data-quality.md). Each normal `DATA_QUALITY` run also refreshes that table's whole-table `overall` snapshot in `geo.data_quality`, so the pipelines carry no separate `--overall` jobs and the aggregate stays in step with the dated rows automatically (see [GEO_ETL — Overall refresh](../../GEO_ETL/docs/etl_jobs/data-quality.md#overall-refresh)).
+
+### Data source file step
+
+Every source also has a `DATA_SOURCE_FILE` job released directly by its `DOWNLOAD` job (a sibling of `INGESTION`), with `table_name` set to the source folder name (e.g. `NIFC`). It publishes that source's CSV inventory to `geo.data_source_files` for GEO_API; GEO_ETL picks `HISTORICAL` or `INCREMENTAL` from the state of that table. It has no successor, so like the `DATA_QUALITY` jobs it is a terminal branch that only the verdict gate waits on — see [GEO_ETL — DATA_SOURCE_FILE job](../../GEO_ETL/docs/etl_jobs/data-source-file.md).
 
 ### Single ETL step
 
@@ -249,7 +268,7 @@ Failure semantics follow the trigger rules: a failed (or skipped) job skips ever
 The `Union` job is not a normal source. Its root (`Union.single_etl`) is the only task with the `all_done_min_one_success` trigger rule, and `build_task_specs()` gives it — automatically — the `SINGLE_ETL` task of every other chain (`NIFC.single_etl`, `GDACS.single_etl`, …) as upstreams:
 
 - Adding or removing a source chain needs no edit to `SINGLE_ETL-union_etl`; the fan-in follows the chains in `jobs.json`.
-- The union starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — **but only if at least one of them succeeded**. When all nine failed, the scheduler marks it `upstream_failed` without running it (nothing fresh to stack); when all nine are skipped, it is skipped as well. The `DATA_QUALITY` jobs are terminal steps of `jobs.json` (only the verdict gate waits on them) and are deliberately not part of the fan-in.
+- The union starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — **but only if at least one of them succeeded**. When all nine failed, the scheduler marks it `upstream_failed` without running it (nothing fresh to stack); when all nine are skipped, it is skipped as well. The `DATA_QUALITY` and `DATA_SOURCE_FILE` jobs are terminal steps of `jobs.json` (only the verdict gate waits on them) and are deliberately not part of the fan-in.
 - Jobs referenced from the union root wait for it with the normal `all_success` rule (shipped: `DATA_QUALITY-union_etl` and the seventeen `VIEW-<view_name>` jobs).
 - `jobs.json` must always contain the `Union` job — `build_task_specs()` raises `ValueError` at parse time otherwise, which surfaces as a DAG import error in the UI until it is back.
 
@@ -282,6 +301,7 @@ The runtime knobs live in the `dag` block of `config.json`, loaded via pydantic 
     "download": "download",
     "ingestion": "etl",
     "data_quality": "etl",
+    "data_source_file": "etl",
     "single_etl": "etl",
     "view": "etl",
     "verdict": "etl"
@@ -311,7 +331,7 @@ You can inspect the pools under **Admin → Pools** or via `docker compose run -
 
 ## Data folder and runtime UID (`.env`)
 
-`GEO_DATA_DIR` is the host folder bind-mounted at `/opt/geo/GEO_Download/data` in the Airflow and Spark containers. `./setup.sh` writes the absolute path into `.env`; the manual `.env.example` uses the relative `../GEO_Download/data`. This folder is the single source of truth for the downloaded CSVs and reference lookups, so keep it when editing `.env` by hand.
+`GEO_DATA_DIR` is the host folder bind-mounted at `/opt/geo/GEO_Download/data` in the Airflow and Spark containers. GEO_ETL publishes the CSV inventory from the Spark side to Supabase, and GEO_API reads that table. `./setup.sh` writes the absolute path into `.env`; the manual `.env.example` uses the relative `../GEO_Download/data`. This folder is the single source of truth for the downloaded CSVs and reference lookups, so keep it when editing `.env` by hand.
 
 `AIRFLOW_UID` is the host UID the Airflow containers run as. Downloads therefore create files owned by that user, and the same UID is used by `airflow-init` when it prepares `/opt/airflow` and the bind-mounted data folder. `./setup.sh` detects it automatically; the manual template uses `1000`.
 
@@ -371,7 +391,7 @@ For a fresh Docker-only checkout, **only the five `SUPABASE_DB_*` values are req
    | `SUPABASE_DB_USER` | *Transaction pooler* → **User** | `postgres.<project-ref>` |
 
    > `6543` is the **transaction pooler**; the direct primary listener uses `5432`. Airflow holds long-lived pooled connections, so the pooler (with the defaults `sql_alchemy_pool_pre_ping = true`, `sql_alchemy_pool_recycle = 1800`) is the right port — the same one GEO_ETL uses.
-4. **Supabase password** — `SUPABASE_DB_PASSWORD` is **never displayed** in the dashboard: use the value you saved when the project was created, or go to **Project Settings → Database → Generate password** (formerly *Reset database password*). That rotation invalidates the previous password immediately. See [GEO_ETL — Supabase Credentials](../../GEO_ETL/docs/configuration.md#supabase-credentials) for the walkthrough, API/PAT rotation and a least-privilege role.
+4. **Supabase password** — `SUPABASE_DB_PASSWORD` is **never displayed** in the dashboard: use the value you saved when the project was created, or go to **Project Settings → Database → Generate password** (formerly *Reset database password*). That rotation invalidates the previous password immediately. See [GEO_ETL — Supabase Credentials](../../GEO_ETL/docs/configuration/supabase-credentials.md) for the walkthrough, API/PAT rotation and a least-privilege role.
 5. **Schema** — leave `AIRFLOW_DB_SCHEMA=geo_airflow`. On the first `docker compose up`, `airflow-init` creates it and runs the migration into it.
 6. **Optional React API URL** — `VITE_API_BASE` is compiled into `geo_react_app`; keep `http://localhost:8000` when the browser runs on the Docker host.
 7. **Check** — `docker compose config --quiet` renders the file and fails with the name of any missing key. To verify the metadata connection and schema:
@@ -412,7 +432,7 @@ Edit the `schedule` field on the scheduled jobs in `jobs.json` — the nine `DOW
 
 ### Adding a new data source
 
-1. Add five job objects to the `jobs.json` array for the new `source_name`: `DOWNLOAD-<Source>` — carrying the same `schedule` cron as the other downloads — referencing `INGESTION-<table>`, which references both `DATA_QUALITY-<table>` and `SINGLE_ETL-<table>_etl` — the latter referencing `DATA_QUALITY-<table>_etl` (all downstreamed, so no `schedule` field). The placement and dependency rules are spelled out in [Constructing the DAG](#constructing-the-dag).
+1. Add six job objects to the `jobs.json` array for the new `source_name`: `DOWNLOAD-<Source>` — carrying the same `schedule` cron as the other downloads — referencing both `INGESTION-<table>` and `DATA_SOURCE_FILE-<Source>`; `INGESTION` references both `DATA_QUALITY-<table>` and `SINGLE_ETL-<table>_etl` — the latter referencing `DATA_QUALITY-<table>_etl` (all downstreamed, so no `schedule` field; `DATA_SOURCE_FILE` has no successor). The placement and dependency rules are spelled out in [Constructing the DAG](#constructing-the-dag).
 2. Make sure the source exists in GEO_Download's `config.json` and that the table exists in GEO_ETL.
 3. Wait for the DAG to re-parse (or trigger a refresh in the UI) — the new tasks appear automatically.
 

@@ -48,7 +48,7 @@ Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin`
 |------|------------|
 | **DAGs** | `geo_pipeline` is unpaused from the start (`dags_are_paused_at_creation=false`); see next/last run |
 | **Grid** view of a run | per-task state: green = success, red = failed, grey = skipped (downstream of a failure), light green = running |
-| **Graph** view | the full task graph — 65 tasks: 9 chains of 5 + the union chain (fan-in + data quality + 17 views) + the `Union.verdict` task |
+| **Graph** view | the full task graph — 74 tasks: 9 chains of 6 + the union chain (fan-in + data quality + 17 views) + the `Union.verdict` task |
 | **Gantt** view | task durations over the run |
 | Task log | the full stdout/stderr of the task's `conda run` subprocess (also includes the memory callback line) |
 | **Trigger DAG** | run the pipeline manually, without waiting for the 08:00 schedule |
@@ -111,6 +111,7 @@ Every task's output is the Airflow task log (web UI → task → **Log**), store
 ../GEO_Download/logs/<source>/download_<source>_<timestamp>.log      # GEO_Download — DOWNLOAD step
 ../GEO_ETL/logs/ingestion/ingestion_<table>_<timestamp>.log          # GEO_ETL — INGESTION step
 ../GEO_ETL/logs/data_quality/data_quality_<table>_<timestamp>.log    # GEO_ETL — DATA_QUALITY step (plain and _etl table)
+../GEO_ETL/logs/data_source_file/data_source_file_<source>_<timestamp>.log # GEO_ETL — DATA_SOURCE_FILE step
 ../GEO_ETL/logs/single_etl/single_etl_<table>_etl_<timestamp>.log    # GEO_ETL — SINGLE_ETL step
 ```
 
@@ -132,6 +133,6 @@ NIFC.ingestion Memory: 21.57 out of 62.50 GiB (34.50 %) used
 
 For ETL steps, the JVM's `[spark]` stderr lines and the stage-memory lines are appended to stdout after the job finishes (they only exist once the log merge runs), so they appear at the end of the task log; the `GEO_ETL` `.log` file keeps the fully merged chronological view.
 
-A non-zero return code fails the task (`Command exited with return code 1` + red state in the UI), and everything chained below it is skipped — e.g. a failed `NIFC.download` skips `NIFC.ingestion` and its whole subtree, while `GDACS.download` is unaffected. The union task still runs once every chain reached a terminal state — provided at least one single-ETL succeeded; when all nine failed, it is marked `upstream_failed` without running. A source whose upstream has no new data yet (e.g. the IBTrACS `last3years` file trails the present by 1–2 days) exits non-zero and shows red by design — it is not masked.
+A non-zero return code fails the task (`Command exited with return code 1` + red state in the UI), and everything chained below it is skipped — e.g. a failed `NIFC.download` skips `NIFC.ingestion`, `NIFC.data_source_file` and their whole subtrees, while `GDACS.download` is unaffected. The union task still runs once every chain reached a terminal state — provided at least one single-ETL succeeded; when all nine failed, it is marked `upstream_failed` without running. A source whose upstream has no new data yet (e.g. the IBTrACS `last3years` file trails the present by 1–2 days) exits non-zero and shows red by design — it is not masked.
 
 After a fix, open the failed task in the UI and press **Clear** — only that task and its downstream re-run.

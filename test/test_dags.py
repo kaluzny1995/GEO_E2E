@@ -60,6 +60,7 @@ def test_source_chain_wiring(specs_map: dict[str, TaskSpec]) -> None:
     # Assert
     assert specs["NIFC.download"].upstream == ()
     assert specs["NIFC.ingestion"].upstream == ("NIFC.download",)
+    assert specs["NIFC.data_source_file"].upstream == ("NIFC.download",)
     assert specs["NIFC.data_quality"].upstream == ("NIFC.ingestion",)
     assert specs["NIFC.single_etl"].upstream == ("NIFC.ingestion",)
     assert specs["NIFC_etl.data_quality"].upstream == ("NIFC.single_etl",)
@@ -136,6 +137,9 @@ def test_commands_are_built_from_config(specs_map: dict[str, TaskSpec]) -> None:
     assert specs["NIFC.download"].command == (
         "cd ..;cd GEO_Download;conda run --no-capture-output -n geo_download_311 python run_download.py NIFC"
     )
+    assert specs["NIFC.data_source_file"].command == (
+        "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_SOURCE_FILE NIFC"
+    )
     assert specs[UNION_ROOT_ID].command == f"{ETL_CMD_PREFIX} SINGLE_ETL union_etl"
 
 
@@ -148,6 +152,7 @@ def test_job_types_are_preserved_for_pooling(specs_map: dict[str, TaskSpec]) -> 
     assert specs["NIFC.download"].job_type == EJobType.DOWNLOAD
     assert specs["NIFC.ingestion"].job_type == EJobType.INGESTION
     assert specs["NIFC.data_quality"].job_type == EJobType.DATA_QUALITY
+    assert specs["NIFC.data_source_file"].job_type == EJobType.DATA_SOURCE_FILE
     assert specs["NIFC.single_etl"].job_type == EJobType.SINGLE_ETL
     assert specs["View.metrics_flood_vw"].job_type == EJobType.VIEW
     assert specs["Union.verdict"].job_type == EJobType.VERDICT

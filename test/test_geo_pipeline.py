@@ -65,7 +65,7 @@ def test_groups_the_registry_into_nine_source_subdags_and_the_union(
 
 
 def test_each_subdag_holds_one_source_chain(rendered_dag: tuple[GEO_DAG, DAG, dict[str, BashOperator]]) -> None:
-    """Every subDAG carries the task ids of exactly one source: five tasks per source chain,
+    """Every subDAG carries the task ids of exactly one source: six tasks per source chain,
     twenty for the union chain (fan-in + data quality + the seventeen views + the verdict),
     and no task id is shared between subDAGs."""
     # Arrange & Act
@@ -86,7 +86,7 @@ def test_each_subdag_holds_one_source_chain(rendered_dag: tuple[GEO_DAG, DAG, di
                 *(spec.task_id for spec in build_task_specs() if spec.job_type == EJobType.VIEW),
             }
         else:
-            assert len(subdag.task_ids) == 5, subdag.source_name
+            assert len(subdag.task_ids) == 6, subdag.source_name
     assert len(rendered) == len(build_task_specs())
 
 
