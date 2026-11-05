@@ -79,8 +79,10 @@ state from the metadata DB.)
 - **Standalone, without recording a run** — `tasks test` executes one task once in a temporary run, keeping nothing in the metadata DB (useful for debugging a job in isolation; the memory callback still writes to the output):
 
 ```bash
-docker compose run --rm airflow-cli tasks test geo_pipeline NIFC.download
+docker compose exec airflow-scheduler airflow tasks test geo_pipeline NIFC.download
 ```
+
+Run task tests in the **scheduler** container rather than the `airflow-cli` debug service. `airflow-cli` overrides the image entrypoint, so its runtime UID has no passwd entry; Spark's Hadoop login then fails with `LoginException: invalid null input: name` for every ETL task. Downloads work either way, but the scheduler command is the one that covers both.
 
 ## Pause / unpause the schedule
 
