@@ -11,7 +11,10 @@ GEO_E2E/
 ├── .env.example              # Docker credentials template (committed)
 ├── .env                      # Supabase/Airflow credentials (git-ignored)
 ├── setup.sh                  # Bootstrap for host + image mode (GEO_DOCKER=1)
-├── build-images.sh           # Serial image builds (one conda solver at a time)
+├── build-images.sh           # Preflight + serial image builds (one conda solver at a time)
+├── preflight.py              # Checks the six sibling repos and SUPABASE_DB_* in .env
+├── check.sh / check.ps1      # Preflight wrappers (POSIX / Windows)
+├── up.sh / up.ps1            # Preflight, then docker compose up
 ├── setup.ps1                 # Windows twin of setup.sh — same detection, same file names
 ├── setup.command             # macOS double-click entry point — thin wrapper that runs setup.sh
 ├── .gitignore                # Excludes .env, .env.docker, logs/, __pycache__, .tox, IDE files
@@ -52,6 +55,7 @@ GEO_E2E/
     ├── test_geo_pipeline.py  # JobsSubDAG / GEO_DAG: subDAGs, the rendered mega-DAG, the union fan-in
     ├── test_jobs.py          # Job chains from jobs.json + command building
     ├── test_models.py        # JobTypeConfig, JobConfig, get_job_config()
+    ├── test_preflight.py     # six repositories + Supabase credentials gate
     └── test_util.py          # memory helpers
 ```
 
@@ -65,7 +69,9 @@ GEO_E2E/
 | `jobs.json` | Flat job list — one object per job (`name`, `job_type`, `next_jobs` as name references) — plus the `Union` job |
 | `docker-compose.yaml` | Four images (`geo_airflow_spark`, `geo_fastapi`, `geo_react_app`, `geo_streamlit`), bridge network, host data bind mount + named volumes; Airflow UI on 8090, Spark UI on 8083, API on 8000, React app on 3000, Streamlit app on 8501; every service has a hard `mem_limit`/`memswap_limit` and capped Airflow/Spark concurrency |
 | `setup.sh` | Host mode writes the git-ignored `.env` (paths, login, Supabase credentials); `GEO_DOCKER=1` writes the same file with container paths (`/opt/geo`, `/opt/conda`) and reads credentials from the environment. Mirrors `SUPABASE_DB_*` into `../GEO_ETL/.env`, `../GEO_API/.env` and `../GEO_Visual/.env` |
-| `build-images.sh` | Builds `geo_airflow_spark`, `geo_fastapi`, `geo_streamlit` and `geo_react_app` one at a time so the Anaconda solver does not run in parallel |
+| `preflight.py` | Checkout gate: all six repositories present side by side (with their marker files), `.env` exists, five `SUPABASE_DB_*` values are non-empty/non-placeholder and the port is valid. Prints every problem plus the remediation and exits 1; `check.sh`/`check.ps1` wrap it |
+| `up.sh` / `up.ps1` | Run `check.sh`/`check.ps1`, then `docker compose up "$@"` — the supported start command; Docker is never invoked when the preflight fails |
+| `build-images.sh` | Runs the preflight, then builds `geo_airflow_spark`, `geo_fastapi`, `geo_streamlit` and `geo_react_app` one at a time so the Anaconda solver does not run in parallel |
 | `docker/geo_airflow_spark/Dockerfile` | Airflow 3.3.2 + Anaconda + the three conda envs + Spark 3.5.5 + runtime GEO_E2E/GEO_Download/GEO_ETL files under `/opt/geo` |
 | `docker/geo_airflow_spark/create_schema.py` | Creates the `geo_airflow` schema on Supabase — `airflow-init` runs it before `airflow db migrate`, so the migration's tables land in the schema the connection's `search_path` points at |
 | `docker/geo_airflow_spark/refresh-env.sh` | Re-runs `setup.sh` in image mode, injecting Compose-provided credentials into the in-image `.env` files |
@@ -84,6 +90,8 @@ GEO_E2E/
 | `geo_streamlit` | `geo_streamlit` | GEO_Visual, Anaconda + `geo_visual_311`, Streamlit on 8501 |
 
 Dependencies: Airflow → Supabase + Spark + the host data folder; FastAPI → Supabase; React → FastAPI healthy; Streamlit → Supabase views read-only; Spark workers → Spark master. Airflow and Spark share the host `GEO_Download/data` folder through a bind mount (`GEO_DATA_DIR`), so a CSV written by a download task is visible to every executor and to the host immediately; GEO_ETL's PySpark DATA_SOURCE_FILE job publishes the CSV inventory to `geo.data_source_files`, and GEO_API reads that table without mounting the data folder.
+
+Healthchecks: the shared `geo_airflow_spark` image serves several roles, so the probes are defined per Compose service rather than once in the image — `airflow jobs check --job-type SchedulerJob` / `DagProcessorJob` for the scheduler and DAG processor, `/api/v2/monitor/health` for the API server, and TCP port probes for the Spark master and workers. The three application images carry their own `HEALTHCHECK` (`/health`, nginx `/`, Streamlit `/_stcore/health`). `airflow-init` and `airflow-dag-activate` are one-shot services gated by `service_completed_successfully`; `airflow-cli` is debug-only.
 
 GEO_Visual runs in `geo_streamlit` and reads the dashboard views directly from Supabase (read-only SQL), independently of GEO_API.
 

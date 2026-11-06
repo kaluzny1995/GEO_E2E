@@ -19,6 +19,8 @@ Tests cover:
 - **DAG generation** — `build_task_specs()` validates the flat jobs.json registry (unique `name`s and `task_id`s, resolvable `next_jobs` references, one parent per job, no cycles, scheduled jobs are unsourced roots sharing one cron via `resolve_schedule()`, the union job never scheduled, no `VERDICT` job declared) and turns it into Airflow task specs: one spec per job with the unique, declared `task_id` of its jobs.json entry (`NIFC.single_etl`, `NIFC_etl.data_quality`, `NIFC.data_source_file`, `View.<view_name>`), parent/child wiring via `upstream`, `all_success` for every source-chain task, the union root waiting on the nine `<source>.single_etl` tasks with `all_done_min_one_success` (runs only if ≥1 of them succeeded; the DATA_QUALITY, DATA_SOURCE_FILE and VIEW jobs stay outside the fan-in), commands carried over from `config.json`, the synthesized verdict task (`Union.verdict`: `all_done` on every registry task, its Jinja command reading the union root's state via `ti.get_task_states()` so it alone decides the run's outcome), and `ValueError` when the `Union` job is missing or the registry is invalid
 - **Airflow rendering** — `geo_dag.JobsSubDAG` / `geo_dag.GEO_DAG` (`test/test_geo_pipeline.py`, skipped where Airflow is not installed): the registry grouped into nine source subDAGs + the union subDAG (its twenty tasks: fan-in, data quality, views, verdict), the rendered DAG matching `build_task_specs()` task-for-task (ids, upstreams, trigger rules, commands, pools, cwd), the union fan-in and its data-quality/view children, the verdict rendered as the DAG's only leaf, the verdict command's Jinja rendering (exits 1 unless `Union.single_etl` succeeded), and the `@dag` keywords
 - **Pool seeding** — `test/test_seed_pools.py`: `seed_pools()` (`docker/geo_airflow_spark/seed_pools.py`) creates every `dag.pool_slots` pool via the airflow CLI through `/entrypoint`, and the pools seeded at startup are asserted to match the shipped `config.json`
+- **Preflight** — `test/test_preflight.py` covers the gate run by `check.sh`/`up.sh`: all six repositories must exist side by side with their marker files, `.env` must exist with five non-placeholder Supabase values and a valid port, Compose-style quotes/comments/`export` parse correctly, exported variables override `.env`, missing items are all named in the actionable error, secrets are never printed, and the CLI exits 0/1 accordingly. `test/test_compose.py` also asserts that `up.sh`, `build-images.sh` and the PowerShell twins run the preflight before Docker.
+- **Healthchecks** — `test/test_compose.py` asserts that every long-running service has the right probe: scheduler/DAG processor via `airflow jobs check`, API server via `/api/v2/monitor/health`, Spark master/workers via TCP, and the three application images via their Dockerfile `HEALTHCHECK` (GEO_API `/health`, nginx `/`, Streamlit `/_stcore/health`); one-shot and debug services intentionally have none.
 - **Stack wiring** — `test/test_compose.py` asserts the four-image setup: the Dockerfiles and image names, the host `GEO_Download/data` bind mount (`GEO_DATA_DIR`), the host-UID runtime user (`AIRFLOW_UID`), no host source bind mounts or host conda, the connection URL built from the `SUPABASE_DB_*` env vars with `sslmode=require` and `search_path=geo_airflow`, the password travelling in `PGPASSWORD` (never in the URL), `create_schema.py` running before the migration, the `.env.example` template, Airflow's `airflow_admin` defaults, runtime credential injection, container dependencies, the build ignore files, per-service `mem_limit`/`memswap_limit` and the capped `LocalExecutor` parallelism. `test/test_create_schema.py` covers the schema step itself (`get_schema()` default/environment override/identifier validation and the idempotent `CREATE SCHEMA IF NOT EXISTS`, skipped where SQLAlchemy is absent — same pattern as the Airflow tests)
 - **Memory logging** — `get_memory_info()` and `log_memory_usage()` output format and correctness
 
@@ -33,10 +35,11 @@ Problems that only show up against the container (e.g. broken job config) still 
 ### Docker smoke test after a change
 
 ```bash
+./check.sh                                     # six repos + Supabase credentials
 docker compose config --quiet                  # validate the rendered Compose file
-./build-images.sh                              # serial builds (or: docker compose build)
-docker compose up -d                            # recreate containers
-docker compose ps                               # every service healthy
+./build-images.sh                              # serial builds (runs the preflight first)
+./up.sh -d                                     # preflight + recreate containers
+docker compose ps                               # long-running services healthy; one-shots exited 0
 docker stats --no-stream                        # memory stays below the cgroup limits
 docker compose logs -f airflow-scheduler        # DAG parsing + task execution
 curl -fsS http://localhost:8000/health          # GEO_API + Supabase
@@ -63,7 +66,7 @@ conda env update -f environment.yml   # only needed once if the env already exis
 | Tool | Role | Where it is configured |
 |------|------|------------------------|
 | **Ruff** | Linter + formatter + import sorter (replaces flake8 / isort / black) | `pyproject.toml` → `[tool.ruff]`, `[tool.ruff.lint]`, `[tool.ruff.format]` |
-| **mypy** | Static type checking of `model.py`, `geo_dag.py`, `geo_pipeline.py`, `util.py` and the `docker/` scripts | `pyproject.toml` → `[tool.mypy]`, `tox.ini` → `[testenv:typecheck]` |
+| **mypy** | Static type checking of `model.py`, `geo_dag.py`, `geo_pipeline.py`, `util.py`, `preflight.py` and the `docker/` scripts | `pyproject.toml` → `[tool.mypy]`, `tox.ini` → `[testenv:typecheck]` |
 | **tox** | Runs every check in a throwaway virtualenv with its own dependencies | `tox.ini` |
 | **pytest** | Test suite | `pyproject.toml` → `[tool.pytest.ini_options]` |
 

@@ -193,7 +193,7 @@ else
     CONDA_COMMENT="# Conda installation on the host (optional — used by local, non-container runs)"
     UID_COMMENT="# Host uid of your user"
     FILE_COMMENT="Regenerate with ./setup.sh --force, or edit by hand; docker compose auto-loads .env from this directory."
-    NEXT_LINE="Next: docker compose up -d --build"
+    NEXT_LINE="Next: ./build-images.sh && ./up.sh -d (both run the preflight check automatically)"
 fi
 
 if [[ ! -d "$CONDA_ROOT" ]]; then
@@ -228,7 +228,7 @@ if [[ -z "$SUPABASE_DB_USER" || -z "$SUPABASE_DB_PASSWORD" || -z "$SUPABASE_DB_H
     # In image mode Compose itself requires the five values before starting the container,
     # so a build-time warning would only be noise.
     [[ "$DOCKER_MODE" == "1" ]] || echo "warning: SUPABASE_DB_* not found in $ENV_FILE, $GEO_ROOT/GEO_ETL/.env, $GEO_ROOT/GEO_API/.env or $GEO_ROOT/GEO_Visual/.env — fill them in $ENV_FILE" \
-        "(template: .env.example) before docker compose" >&2
+        "(template: .env.example) before docker compose; ./check.sh lists anything still missing" >&2
 fi
 
 cat > "$PROJECT_DIR/$ENV_FILE" <<EOF

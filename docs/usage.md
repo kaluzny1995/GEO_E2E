@@ -4,16 +4,18 @@
 
 ## Start the stack
 
-> **Prerequisite:** `.env` must exist in the project root with the five `SUPABASE_DB_*` values. Airflow defaults to `airflow_admin` / `airflow_admin`; override `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` only if needed. Create `.env` with `cp .env.example .env` (or `./setup.sh`) — see [README — Dockerizing the solution](../README.md#1-configure-credentials--mandatory-before-docker-compose-up).
+> **Prerequisites:** all six GEO repositories (`GEO_API`, `GEO_APP`, `GEO_Download`, `GEO_E2E`, `GEO_ETL`, `GEO_Visual`) must be checked out in the same folder, and `.env` must exist in the project root with the five `SUPABASE_DB_*` values. Airflow defaults to `airflow_admin` / `airflow_admin`; override `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` only if needed. Create `.env` with `cp .env.example .env` (or `./setup.sh`) — see [README — Dockerizing the solution](../README.md#1-configure-the-checkout-and-credentials--mandatory-before-docker-compose-up).
 
 Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-./build-images.sh     # serial builds; safer on a laptop
-docker compose up -d
+./build-images.sh     # serial builds; runs the preflight first
+./up.sh -d            # preflight + docker compose up -d
 ```
 
-`docker compose up -d --build` works too, but builds independent images in parallel and can spike RAM on the first run.
+`./up.sh` first runs `./check.sh`, which verifies the six repositories and the five Supabase values. If anything is missing it prints the exact problem and fix, then exits before Docker starts a container. Run the same check alone with `./check.sh` (or `python3 preflight.py`); raw `docker compose up -d` skips this friendly preflight.
+
+`./up.sh -d --build` works too, but builds independent images in parallel and can spike RAM on the first run.
 
 This builds the four images (first run only) and starts the one-shot `airflow-init` (Supabase schema creation, DB migration, admin user, pool seeding, `.env` refresh), the DAG processor, the scheduler, the API server, the DAG activation job, the Spark cluster, GEO_API, GEO_APP and GEO_Visual. Follow the scheduler to watch task execution:
 
@@ -31,10 +33,10 @@ docker stats --no-stream     # every container stays inside its memory limit
 
 ```bash
 docker compose build                 # rebuild changed images
-docker compose up -d                 # recreate containers
+./up.sh -d                           # preflight + recreate containers
 ```
 
-Use `./build-images.sh` when RAM is tight (serial builds). `docker compose restart` does not rebuild an image. See [README — Rebuilding](../README.md#5-rebuilding-after-repository-changes).
+Use `./build-images.sh` when RAM is tight (serial builds; it runs the preflight first). `docker compose restart` does not rebuild an image. See [README — Rebuilding](../README.md#5-rebuilding-after-repository-changes).
 
 > **Troubleshooting — services crash-looping with `ModuleNotFoundError: No module named 'airflow'`:** this comes from the entrypoint's `airflow db check` when `docker-compose.yaml` sets `HOME: /opt/airflow`. The `airflow` console script resolves its packages through the *HOME* user-site, while the image installs Airflow in `/home/airflow/.local`; the entrypoint only self-corrects `HOME` on a container's **first** start (when its uid is still missing from `/etc/passwd`), so every *restarted* service dies. Do not add a `HOME` override to the compose services — `AIRFLOW_HOME: /opt/airflow` alone keeps data/logs on the volume (see the comment in `docker-compose.yaml`).
 

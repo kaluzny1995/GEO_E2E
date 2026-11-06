@@ -1,5 +1,6 @@
 """Tests for the four-image Docker stack and its environment wiring."""
 
+import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,17 @@ IMAGES = {
 def _conn_line() -> str:
     """The single compose line that assembles the SQLAlchemy connection URL."""
     return next(line for line in _COMPOSE.splitlines() if "SQL_ALCHEMY_CONN" in line)
+
+
+def _service_block(name: str) -> str:
+    """The text of one top-level Compose service, without its sibling services."""
+    match = re.search(
+        rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        _COMPOSE,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, name
+    return match.group("body")
 
 
 def test_four_images_and_dockerfiles_exist() -> None:
@@ -200,6 +212,41 @@ def test_container_dependencies() -> None:
     assert "VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}" in _COMPOSE
 
 
+def test_every_long_running_service_has_a_healthcheck() -> None:
+    """The shared Airflow/Spark image is multi-role, so each long-running service probes its role."""
+    expected_probe = {
+        "airflow-dag-processor": "DagProcessorJob",
+        "airflow-scheduler": "SchedulerJob",
+        "airflow-api-server": "/api/v2/monitor/health",
+        "geo-spark-master": "/dev/tcp/geo-spark-master/7078",
+        "geo-spark-worker-1": "/dev/tcp/127.0.0.1/8081",
+        "geo-spark-worker-2": "/dev/tcp/127.0.0.1/8081",
+    }
+    for service, probe in expected_probe.items():
+        block = _service_block(service)
+        assert "healthcheck:" in block, service
+        assert probe in block, f"{service}: {probe}"
+
+
+def test_application_images_have_healthchecks() -> None:
+    """Each application image checks the endpoint that actually serves its traffic."""
+    expected_probe = {
+        "geo_fastapi": "http://127.0.0.1:8000/health",
+        "geo_react_app": "http://127.0.0.1/",
+        "geo_streamlit": "http://127.0.0.1:8501/_stcore/health",
+    }
+    for image, probe in expected_probe.items():
+        dockerfile = IMAGES[image].read_text()
+        assert "HEALTHCHECK" in dockerfile, image
+        assert probe in dockerfile, f"{image}: {probe}"
+
+
+def test_one_shot_and_debug_services_do_not_need_healthchecks() -> None:
+    """Init/activate are gated by service_completed_successfully; the CLI is debug-only."""
+    for service in ("airflow-init", "airflow-dag-activate", "airflow-cli"):
+        assert "healthcheck:" not in _service_block(service), service
+
+
 def test_images_exclude_development_files() -> None:
     """Every build context excludes docs/tests/tooling; the source folders are selectively copied."""
     for image in IMAGES:
@@ -253,3 +300,40 @@ def test_serial_build_helper_exists() -> None:
     for service in ("airflow-init", "geo_fastapi", "geo_streamlit", "geo_react_app"):
         assert service in text
     assert "docker compose build" in text
+    assert "check.sh" in text
+
+
+def test_preflight_checks_all_six_repositories_and_supabase_credentials() -> None:
+    """The preflight is the single source of truth for the start-up gate."""
+    text = (_ROOT / "preflight.py").read_text()
+    for repository in ("GEO_API", "GEO_APP", "GEO_Download", "GEO_E2E", "GEO_ETL", "GEO_Visual"):
+        assert f'"{repository}"' in text, repository
+    for variable in SUPABASE_VARS:
+        assert f'"{variable}"' in text, variable
+    assert "./setup.sh" in text
+
+
+def test_start_helpers_run_the_preflight_before_compose() -> None:
+    """check.sh/up.sh (and their PowerShell twins) gate every Docker start."""
+    check = (_ROOT / "check.sh").read_text()
+    up = (_ROOT / "up.sh").read_text()
+    check_ps = (_ROOT / "check.ps1").read_text()
+    up_ps = (_ROOT / "up.ps1").read_text()
+    assert "preflight.py" in check
+    assert "preflight.py" in check_ps
+    assert "check.sh" in up
+    assert "check.ps1" in up_ps
+    assert up.index("check.sh") < up.rindex("docker compose up")
+    assert up_ps.index("check.ps1") < up_ps.rindex("docker compose up")
+
+
+def test_env_template_documents_the_preflight_gate() -> None:
+    """The committed template tells users to run the checked start command."""
+    assert "./up.sh -d" in _ENV_EXAMPLE
+    assert "./check.sh" in _ENV_EXAMPLE
+
+
+def test_setup_scripts_point_to_the_checked_start_command() -> None:
+    """setup.sh/setup.ps1 end with the command that runs the preflight."""
+    assert "./up.sh" in (_ROOT / "setup.sh").read_text()
+    assert ".\\up.ps1" in (_ROOT / "setup.ps1").read_text()

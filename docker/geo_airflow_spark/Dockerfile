@@ -146,4 +146,7 @@ RUN cd /opt/geo/GEO_E2E \
 
 USER airflow
 
+# No image-level HEALTHCHECK: this image runs several roles (Airflow scheduler, API server,
+# DAG processor, Spark master and workers), each with a different liveness probe. The
+# role-specific healthchecks are defined per Compose service in docker-compose.yaml.
 EXPOSE 8090 7078 8083 8084 8085

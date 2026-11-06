@@ -25,6 +25,7 @@ The images are self-contained: no host conda or host source bind mounts. The onl
 
 ## Features
 
+- **Preflight gate before Docker** — `./up.sh` / `./check.sh` verify that all six repositories are present side by side and that `.env` carries the five Supabase credentials; a missing repository or placeholder value stops the stack with an actionable error before any container starts.
 - **Dependency-driven sequencing** — DOWNLOAD → (INGESTION → (DATA_QUALITY, SINGLE_ETL → DATA_QUALITY), DATA_SOURCE_FILE) is expressed as DAG dependencies; no marker files, no polling.
 - **Web UI monitoring** — live grid/gantt/log view of every job at http://localhost:8090; failures show up as red tasks instead of hidden log warnings.
 - **Union fan-in with `all_done_min_one_success`** — the union job waits for all nine `<source>.single_etl` tasks to reach a terminal state (whatever their results) and runs only if at least one succeeded; no deadline fallback needed, and the DATA_QUALITY / DATA_SOURCE_FILE jobs stay terminal (no job chains from them).
@@ -94,6 +95,8 @@ flowchart TD
 
 ## Prerequisites
 
+- **All six GEO repositories cloned side by side** — `GEO_API`, `GEO_APP`, `GEO_Download`, `GEO_E2E`, `GEO_ETL` and `GEO_Visual` must share one parent folder (`GeographicData/`). The preflight check refuses to start if any is missing.
+- **Python 3 on the host** — used only by the lightweight preflight checker (`preflight.py`, standard library only); the containers do not need a host Python.
 - **Docker Engine 24+ and Docker Compose v2** — the whole stack runs in containers.
 - **A Supabase project** — its PostgreSQL credentials are used by Airflow's metadata DB, GEO_ETL, GEO_API and the GEO_Visual dashboard.
 - **At least 16 GB RAM on the host** — the default container limits total about 14 GB; use the tuning block in `.env.example` on smaller machines. The first Anaconda build is the other memory peak.
@@ -102,9 +105,9 @@ flowchart TD
 
 ## Dockerizing the solution (recommended)
 
-### 1. Configure credentials — mandatory before `docker compose up`
+### 1. Configure the checkout and credentials — mandatory before `docker compose up`
 
-Create the git-ignored `.env` from the template:
+All six repositories (`GEO_API`, `GEO_APP`, `GEO_Download`, `GEO_E2E`, `GEO_ETL`, `GEO_Visual`) must be cloned side by side first; the preflight check at the end of this section verifies that and the credentials below. Create the git-ignored `.env` from the template:
 
 ```bash
 cp .env.example .env
@@ -127,11 +130,28 @@ _AIRFLOW_WWW_USER_USERNAME=airflow_admin
 _AIRFLOW_WWW_USER_PASSWORD=airflow_admin
 ```
 
-`./setup.sh` can also generate `.env` and imports existing Supabase credentials from `../GEO_ETL/.env`, `../GEO_API/.env` or `../GEO_Visual/.env` when present. Manual `cp .env.example .env` remains the simplest path for a fresh Docker-only checkout. On macOS use `./setup.command`; on Windows use `.\setup.ps1`.
+`./setup.sh` can also generate `.env` and imports existing Supabase credentials from `../GEO_ETL/.env`, `../GEO_API/.env` or `../GEO_Visual/.env` when present. Manual `cp .env.example .env` remains the simplest path for a fresh Docker-only checkout. On macOS use `./setup.command`; on Windows use `.\setup.ps1`, then `.\check.ps1` / `.\up.ps1` (the PowerShell twins of the shell helpers).
 
 > **Security:** the Supabase credentials are injected into the containers at **runtime** from the Compose `environment:` section. Every long-running Airflow service (scheduler, API server, DAG processor) refreshes its own in-image `.env` through `airflow-entrypoint.sh`; `airflow-init` does the same before the migration, the FastAPI entrypoint writes `GEO_API/.env`, and the Streamlit entrypoint writes `GEO_Visual/.env`. No credential is ever baked into an image layer. `.env` is git-ignored.
 
 `docker compose` loads `.env` automatically from this directory. It fails before starting with a message naming any missing required Supabase variable.
+
+#### Preflight check — repositories and credentials
+
+`./up.sh -d` runs `./check.sh` before every start. Run the check alone with:
+
+```bash
+./check.sh
+# or, equivalently:
+python3 preflight.py
+```
+
+It verifies both hard requirements:
+
+1. **All six repositories** — `GEO_API`, `GEO_APP`, `GEO_Download`, `GEO_E2E`, `GEO_ETL` and `GEO_Visual` are checked out in the same folder (the parent of `GEO_E2E`).
+2. **Supabase credentials** — `.env` exists and all five `SUPABASE_DB_*` values are non-empty, are not the `<...>` placeholders from `.env.example`, and the port is a valid number.
+
+If something is missing, the check prints the exact repository or variable to fix, the `cp .env.example .env` command and the Supabase dashboard path, then exits non-zero — no container is started. On Windows use `.\check.ps1` / `.\up.ps1`; both wrap the same Python checker.
 
 Where the values come from:
 
@@ -145,13 +165,16 @@ Full walkthrough and URL anatomy: [Configuration → Supabase metadata DB](docs/
 ### 2. Build and start the stack
 
 ```bash
-./build-images.sh      # serial builds; safer on a laptop
-docker compose up -d
+./build-images.sh      # serial builds; runs the preflight first
+./up.sh -d             # preflight + docker compose up -d
 ```
 
-`docker compose up -d --build` works too, but builds independent images in parallel and
-can spike RAM on the first run. The first build is long because Anaconda and the
-`geo_*_311` environments are installed into the images; later rebuilds reuse the Docker
+`./up.sh` is the supported start command: it runs `./check.sh` and only then calls
+`docker compose up`. Raw `docker compose up -d` still works, but it skips the friendly
+preflight (Compose itself only reports missing variables, not missing repositories or
+leftover placeholders). `./up.sh -d --build` works too, but builds independent images in
+parallel and can spike RAM on the first run. The first build is long because Anaconda and
+the `geo_*_311` environments are installed into the images; later rebuilds reuse the Docker
 layer cache.
 
 | Service | Ports | Purpose |
@@ -173,6 +196,8 @@ layer cache.
 **GEO_API:** http://localhost:8000 — health at `/health`, Swagger at `/docs`.
 **GEO_APP:** http://localhost:3000.
 **GEO_Visual:** http://localhost:8501 — Streamlit dashboard.
+
+**Healthchecks:** every long-running service reports health — the scheduler and DAG processor through `airflow jobs check` (`SchedulerJob` / `DagProcessorJob`), the API server through `/api/v2/monitor/health`, the Spark master/workers through TCP probes, GEO_API through `/health`, nginx through `/`, and Streamlit through `/_stcore/health`. The one-shot `airflow-init`/`airflow-dag-activate` and the debug-only `airflow-cli` are gated by `service_completed_successfully`/profile instead.
 
 If a host port is already in use, override it in `.env` without changing the container port:
 `AIRFLOW_HOST_PORT`, `SPARK_MASTER_PORT_HOST`, `SPARK_MASTER_UI_HOST_PORT`,
@@ -251,13 +276,13 @@ The images copy the source at build time and use **no source bind mounts**, so e
 
 ```bash
 docker compose build                 # rebuild every image whose inputs changed
-docker compose up -d                 # recreate the containers on the new images
+./up.sh -d                           # preflight + recreate the containers
 ```
 
 Or in one command:
 
 ```bash
-docker compose up -d --build
+./up.sh -d --build
 ```
 
 Individual images:
@@ -267,11 +292,12 @@ docker compose build airflow-init   # builds geo_airflow_spark (GEO_E2E/GEO_Down
 docker compose build geo_fastapi    # builds geo_fastapi (GEO_API)
 docker compose build geo_streamlit  # builds geo_streamlit (GEO_Visual)
 docker compose build geo_react_app  # builds geo_react_app (GEO_APP)
-docker compose up -d
+./up.sh -d
 ```
 
 On a memory-constrained laptop use `./build-images.sh` instead — it runs exactly these
-four builds serially, keeping only one conda solver alive at a time.
+four builds serially, keeping only one conda solver alive at a time, and runs the preflight
+check before the first build.
 
 `airflow-init` is the Compose service that owns the shared `geo_airflow_spark` build; the scheduler, API server, DAG processor and Spark services reference the same image.
 
@@ -345,7 +371,11 @@ GeographicData/
 │   ├── .env.example        # Docker credentials template (committed)
 │   ├── .env                # local credentials (git-ignored)
 │   ├── setup.sh            # host + image-mode bootstrap (GEO_DOCKER=1)
+│   ├── setup.ps1 / check.ps1 / up.ps1  # Windows twins of the shell helpers
 │   ├── build-images.sh     # serial image builds for memory-constrained machines
+│   ├── preflight.py        # checks all six repos + SUPABASE_DB_* in .env
+│   ├── check.sh            # preflight wrapper (used by up.sh and build-images.sh)
+│   ├── up.sh               # preflight + docker compose up
 │   ├── config.json / jobs.json
 │   ├── model.py / geo_dag.py / geo_pipeline.py / util.py
 │   ├── docker/
@@ -381,7 +411,7 @@ GeographicData/
 Everything runs inside Docker Compose — no local worker/beat processes:
 
 ```bash
-docker compose up -d --build              # build/rebuild images, start the stack
+./up.sh -d --build                       # preflight + build/rebuild + start
 docker compose ps                         # service health and published ports
 docker compose logs -f airflow-scheduler  # follow task execution
 docker compose logs -f geo_fastapi        # follow API requests/logs
@@ -395,7 +425,7 @@ After changing a project, rebuild the affected image and recreate its containers
 
 ```bash
 docker compose build airflow-init   # or geo_fastapi / geo_react_app
-docker compose up -d
+./up.sh -d
 ```
 
 See [Usage](docs/usage.md) for manual triggers, log locations, rebuilds and example output.

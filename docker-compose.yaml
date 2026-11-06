@@ -8,8 +8,9 @@
 #   geo_react_app      compiled GEO_APP served by nginx
 #   geo_streamlit      GEO_Visual Streamlit dashboard + Anaconda (geo_visual_311)
 #
-# Before `docker compose up`, set the five SUPABASE_DB_* values and optionally the Airflow
-# login in .env (see .env.example). Airflow defaults to airflow_admin / airflow_admin.
+# Before `docker compose up`, run `./up.sh -d` (or `./check.sh`): it verifies that all six
+# sibling repositories are present and that the five SUPABASE_DB_* values are filled in .env
+# (see .env.example). Airflow defaults to airflow_admin / airflow_admin.
 # Rebuild after source changes with `docker compose build` or `docker compose up -d --build`.
 
 name: geo_e2e
@@ -156,6 +157,15 @@ services:
       airflow-init:
         condition: service_completed_successfully
     command: dag-processor
+    # The DAG processor registers a DagProcessorJob row; `jobs check` reports healthy only
+    # while that job is alive, so a wedged parser is restarted instead of silently stalling
+    # DAG discovery. Same probe shape as the scheduler below.
+    healthcheck:
+      test: ["CMD-SHELL", "python -m airflow jobs check --job-type DagProcessorJob --hostname $(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   airflow-scheduler:

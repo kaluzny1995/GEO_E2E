@@ -221,7 +221,7 @@ if ($inContainer) {
 } else {
     $condaComment = '# Conda installation on the host (optional — used by local, non-container runs)'
     $fileComment = 'Regenerate with .\setup.ps1 -Force, or edit by hand; docker compose auto-loads .env from this directory.'
-    $nextLine = 'Next: docker compose up -d --build'
+    $nextLine = 'Next: .\up.ps1 -d --build (the preflight check runs first)'
 }
 
 if (-not (Test-Path -LiteralPath $condaRoot)) {
@@ -271,7 +271,7 @@ $supabaseName = Get-SupabaseValue 'SUPABASE_DB_NAME'
 $schema = Get-PreviousValue 'AIRFLOW_DB_SCHEMA'
 if (-not $schema) { $schema = 'geo_airflow' }
 if (-not $supabaseUser -or -not $supabasePassword -or -not $supabaseHost) {
-    Write-Warning "SUPABASE_DB_* not found in $envFile, $geoEtlEnv, $geoApiEnv or $geoVisualEnv — fill them in $envFile (template: .env.example) before docker compose"
+    Write-Warning "SUPABASE_DB_* not found in $envFile, $geoEtlEnv, $geoApiEnv or $geoVisualEnv — fill them in $envFile (template: .env.example) before docker compose; .\check.ps1 lists anything still missing"
 }
 
 $stamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')

@@ -36,7 +36,7 @@ testpaths = ["test"]
 addopts = "-q"
 
 [tool.mypy]
-files = ["model.py", "geo_dag.py", "geo_pipeline.py", "util.py", "docker"]
+files = ["model.py", "geo_dag.py", "geo_pipeline.py", "preflight.py", "util.py", "docker"]
 python_version = "3.11"
 warn_unused_configs = true
 show_error_codes = true

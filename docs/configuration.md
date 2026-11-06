@@ -370,6 +370,15 @@ The images are built without secrets:
 
 The sibling `.env` files therefore always match the Compose credentials, but rebuilding an image never embeds the Supabase password.
 
+### Preflight check before `docker compose up`
+
+`./up.sh -d` runs `./check.sh` before starting anything, and `./build-images.sh` runs the same check before building. It verifies the two hard requirements:
+
+1. **All six repositories are present** — `GEO_API`, `GEO_APP`, `GEO_Download`, `GEO_E2E`, `GEO_ETL` and `GEO_Visual` must be directories in the same parent folder, each with its expected runtime entry point.
+2. **The Supabase credentials are configured** — `.env` exists, all five `SUPABASE_DB_*` keys are non-empty, no value still contains an `<...>` placeholder from `.env.example`, and `SUPABASE_DB_PORT` is a number in `1..65535`.
+
+Run the check alone with `./check.sh` (or `python3 preflight.py`); on Windows use `.\check.ps1`. A failure lists every missing repository/variable and the remediation, exits non-zero, and does not start Docker. Exported environment variables are accepted with the same precedence as Docker Compose, but the `.env` file itself must still exist.
+
 ### Step by step: filling in `.env`
 
 For a fresh Docker-only checkout, **only the five `SUPABASE_DB_*` values are required**. Airflow defaults to `airflow_admin` / `airflow_admin`.
@@ -395,7 +404,7 @@ For a fresh Docker-only checkout, **only the five `SUPABASE_DB_*` values are req
 4. **Supabase password** — `SUPABASE_DB_PASSWORD` is **never displayed** in the dashboard: use the value you saved when the project was created, or go to **Project Settings → Database → Generate password** (formerly *Reset database password*). That rotation invalidates the previous password immediately. See [GEO_ETL — Supabase Credentials](../../GEO_ETL/docs/configuration/supabase-credentials.md) for the walkthrough, API/PAT rotation and a least-privilege role.
 5. **Schema** — leave `AIRFLOW_DB_SCHEMA=geo_airflow`. On the first `docker compose up`, `airflow-init` creates it and runs the migration into it.
 6. **Optional dashboard URLs/ports** — `VITE_API_BASE` is compiled into `geo_react_app`; keep `http://localhost:8000` when the browser runs on the Docker host. `GEO_VISUAL_HOST_PORT` (default `8501`) publishes the Streamlit dashboard.
-7. **Check** — `docker compose config --quiet` renders the file and fails with the name of any missing key. To verify the metadata connection and schema:
+7. **Check** — `./check.sh` verifies the six repositories and the five Supabase values before any container starts; `docker compose config --quiet` additionally renders the full Compose file and fails with the name of any missing key. To verify the metadata connection and schema:
 
    ```bash
    docker compose exec airflow-scheduler python -c "import os; from sqlalchemy import create_engine, text; e=create_engine(os.environ['AIRFLOW__DATABASE__SQL_ALCHEMY_CONN']); print(e.connect().execute(text('select current_schema()')).scalar())"
@@ -403,7 +412,7 @@ For a fresh Docker-only checkout, **only the five `SUPABASE_DB_*` values are req
 
    It prints `geo_airflow` when the connection and the schema are right.
 
-A missing variable stops compose early with a message naming the key (`Set SUPABASE_DB_HOST in .env`). `.env` is git-ignored; only `.env.example` (placeholders) is committed. The legacy `.env.docker` name is still ignored by git but is not used by the Docker images (they write `.env`).
+`./check.sh` catches a missing, empty or placeholder value before Docker starts; without it, Compose still stops early with a message naming the key (`Set SUPABASE_DB_HOST in .env`). `.env` is git-ignored; only `.env.example` (placeholders) is committed. The legacy `.env.docker` name is still ignored by git but is not used by the Docker images (they write `.env`).
 
 ## Resource tuning (`.env`)
 
