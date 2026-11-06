@@ -1,10 +1,12 @@
-# Self-contained GEO E2E stack — three images, no host conda, no host source bind mounts.
+# Self-contained GEO E2E stack — four images, no host conda, no host source bind mounts.
 # The only host mount is the GEO_Download/data folder (GEO_DATA_DIR), shared by Airflow and Spark.
 # GEO_API reads the CSV metadata from Supabase, which GEO_ETL publishes from the Spark side.
+# GEO_Visual reads dashboard views directly from Supabase (read-only), not through GEO_API.
 #
 #   geo_airflow_spark  Airflow 3.3.2 + Spark 3.5.5 + Anaconda + GEO_E2E/GEO_Download/GEO_ETL
 #   geo_fastapi        GEO_API + Anaconda (geo_api_311)
 #   geo_react_app      compiled GEO_APP served by nginx
+#   geo_streamlit      GEO_Visual Streamlit dashboard + Anaconda (geo_visual_311)
 #
 # Before `docker compose up`, set the five SUPABASE_DB_* values and optionally the Airflow
 # login in .env (see .env.example). Airflow defaults to airflow_admin / airflow_admin.
@@ -365,6 +367,29 @@ services:
     networks:
       - geo_network
     restart: unless-stopped
+
+  geo_streamlit:
+    image: geo_streamlit:latest
+    mem_limit: ${GEO_VISUAL_MEM_LIMIT:-1g}
+    memswap_limit: ${GEO_VISUAL_MEM_LIMIT:-1g}
+    oom_score_adj: 500
+    logging: *default-logging
+    build:
+      context: ..
+      dockerfile: GEO_E2E/docker/geo_streamlit/Dockerfile
+    environment:
+      SUPABASE_DB_USER: ${SUPABASE_DB_USER:?Set SUPABASE_DB_USER in .env}
+      SUPABASE_DB_PASSWORD: ${SUPABASE_DB_PASSWORD:?Set SUPABASE_DB_PASSWORD in .env}
+      SUPABASE_DB_HOST: ${SUPABASE_DB_HOST:?Set SUPABASE_DB_HOST in .env}
+      SUPABASE_DB_PORT: ${SUPABASE_DB_PORT:?Set SUPABASE_DB_PORT in .env}
+      SUPABASE_DB_NAME: ${SUPABASE_DB_NAME:?Set SUPABASE_DB_NAME in .env}
+    ports:
+      - "${GEO_VISUAL_HOST_PORT:-8501}:8501"
+    networks:
+      - geo_network
+    restart: unless-stopped
+    # Reads the dashboard views directly from Supabase; deliberately does not depend on
+    # geo_fastapi (GEO_Visual is not an API client).
 
 volumes:
   airflow_data:

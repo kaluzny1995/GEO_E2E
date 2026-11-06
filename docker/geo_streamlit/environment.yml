@@ -1,0 +1,17 @@
+# Runtime-only definition of geo_visual_311 inside the Streamlit image.
+# The repository environment.yml also lists pytest/ruff/tox/mypy and pandas-stubs;
+# none of them are needed by the running dashboard.
+name: geo_visual_311
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - streamlit>=1.37
+      - pandas>=2.0
+      - sqlalchemy>=2.0
+      - psycopg[binary]>=3.1
+      - python-dotenv>=1.0
+      - pydantic>=2.0
+      - plotly>=5.20

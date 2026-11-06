@@ -7,7 +7,7 @@
 ```
 GEO_E2E/
 ├── README.md                 # Overview, Docker setup and quick start
-├── docker-compose.yaml       # three-image stack: Airflow + Spark, FastAPI, React
+├── docker-compose.yaml       # four-image stack: Airflow + Spark, FastAPI, React, Streamlit
 ├── .env.example              # Docker credentials template (committed)
 ├── .env                      # Supabase/Airflow credentials (git-ignored)
 ├── setup.sh                  # Bootstrap for host + image mode (GEO_DOCKER=1)
@@ -38,9 +38,13 @@ GEO_E2E/
 │   │   ├── Dockerfile
 │   │   ├── environment.yml
 │   │   └── entrypoint.sh     # writes .env, starts uvicorn
-│   └── geo_react_app/        # Vite build stage + nginx runtime
+│   ├── geo_react_app/        # Vite build stage + nginx runtime
+│   │   ├── Dockerfile
+│   │   └── nginx.conf
+│   └── geo_streamlit/        # GEO_Visual + geo_visual_311
 │       ├── Dockerfile
-│       └── nginx.conf
+│       ├── environment.yml
+│       └── entrypoint.sh     # writes .env, starts Streamlit
 ├── docs/                     # Extended documentation (this file lives here)
 └── test/                     # Unit tests
     ├── __init__.py
@@ -59,15 +63,16 @@ GEO_E2E/
 | `util.py` | `get_memory_info()` and `log_memory_usage()` — used as `on_success_callback` / `on_failure_callback` of every task |
 | `config.json` | Command templates for `DOWNLOAD`/`INGESTION`/`DATA_QUALITY`/`DATA_SOURCE_FILE`/`SINGLE_ETL`/`VIEW` (folder, script, conda env) |
 | `jobs.json` | Flat job list — one object per job (`name`, `job_type`, `next_jobs` as name references) — plus the `Union` job |
-| `docker-compose.yaml` | Three images (`geo_airflow_spark`, `geo_fastapi`, `geo_react_app`), bridge network, host data bind mount + named volumes; Airflow UI on 8090, Spark UI on 8083, API on 8000, app on 3000; every service has a hard `mem_limit`/`memswap_limit` and capped Airflow/Spark concurrency |
-| `setup.sh` | Host mode writes the git-ignored `.env` (paths, login, Supabase credentials); `GEO_DOCKER=1` writes the same file with container paths (`/opt/geo`, `/opt/conda`) and reads credentials from the environment. Mirrors `SUPABASE_DB_*` into `../GEO_ETL/.env` and `../GEO_API/.env` |
-| `build-images.sh` | Builds `geo_airflow_spark`, `geo_fastapi` and `geo_react_app` one at a time so the Anaconda solver does not run twice in parallel |
+| `docker-compose.yaml` | Four images (`geo_airflow_spark`, `geo_fastapi`, `geo_react_app`, `geo_streamlit`), bridge network, host data bind mount + named volumes; Airflow UI on 8090, Spark UI on 8083, API on 8000, React app on 3000, Streamlit app on 8501; every service has a hard `mem_limit`/`memswap_limit` and capped Airflow/Spark concurrency |
+| `setup.sh` | Host mode writes the git-ignored `.env` (paths, login, Supabase credentials); `GEO_DOCKER=1` writes the same file with container paths (`/opt/geo`, `/opt/conda`) and reads credentials from the environment. Mirrors `SUPABASE_DB_*` into `../GEO_ETL/.env`, `../GEO_API/.env` and `../GEO_Visual/.env` |
+| `build-images.sh` | Builds `geo_airflow_spark`, `geo_fastapi`, `geo_streamlit` and `geo_react_app` one at a time so the Anaconda solver does not run in parallel |
 | `docker/geo_airflow_spark/Dockerfile` | Airflow 3.3.2 + Anaconda + the three conda envs + Spark 3.5.5 + runtime GEO_E2E/GEO_Download/GEO_ETL files under `/opt/geo` |
 | `docker/geo_airflow_spark/create_schema.py` | Creates the `geo_airflow` schema on Supabase — `airflow-init` runs it before `airflow db migrate`, so the migration's tables land in the schema the connection's `search_path` points at |
 | `docker/geo_airflow_spark/refresh-env.sh` | Re-runs `setup.sh` in image mode, injecting Compose-provided credentials into the in-image `.env` files |
 | `docker/geo_airflow_spark/airflow-entrypoint.sh` | Per-container wrapper: refresh `.env`, then exec Airflow's official `/entrypoint` |
 | `docker/geo_fastapi/Dockerfile` | Anaconda + `geo_api_311`, runtime GEO_API files under `/opt/geo/GEO_API`, uvicorn on 8000 |
 | `docker/geo_react_app/Dockerfile` | Node 20 build stage + nginx runtime; `VITE_API_BASE` baked at build time, port 3000 |
+| `docker/geo_streamlit/Dockerfile` | Anaconda + `geo_visual_311`, runtime GEO_Visual files under `/opt/geo/GEO_Visual`, Streamlit on 8501 |
 
 ## Container architecture
 
@@ -76,8 +81,11 @@ GEO_E2E/
 | `geo_airflow_spark` | `airflow-init`, `airflow-dag-processor`, `airflow-scheduler`, `airflow-api-server`, `airflow-dag-activate`, `geo-spark-master`, `geo-spark-worker-1/2` | Airflow 3.3.2, Spark 3.5.5, Anaconda + `geo_e2e_311`/`geo_download_311`/`geo_etl_311`, projects under `/opt/geo` |
 | `geo_fastapi` | `geo_fastapi` | GEO_API, Anaconda + `geo_api_311`, uvicorn on 8000 |
 | `geo_react_app` | `geo_react_app` | compiled Vite app, nginx on 80 (published as 3000) |
+| `geo_streamlit` | `geo_streamlit` | GEO_Visual, Anaconda + `geo_visual_311`, Streamlit on 8501 |
 
-Dependencies: Airflow → Supabase + Spark + the host data folder; FastAPI → Supabase; React → FastAPI healthy; Spark workers → Spark master. Airflow and Spark share the host `GEO_Download/data` folder through a bind mount (`GEO_DATA_DIR`), so a CSV written by a download task is visible to every executor and to the host immediately; GEO_ETL's PySpark DATA_SOURCE_FILE job publishes the CSV inventory to `geo.data_source_files`, and GEO_API reads that table without mounting the data folder.
+Dependencies: Airflow → Supabase + Spark + the host data folder; FastAPI → Supabase; React → FastAPI healthy; Streamlit → Supabase views read-only; Spark workers → Spark master. Airflow and Spark share the host `GEO_Download/data` folder through a bind mount (`GEO_DATA_DIR`), so a CSV written by a download task is visible to every executor and to the host immediately; GEO_ETL's PySpark DATA_SOURCE_FILE job publishes the CSV inventory to `geo.data_source_files`, and GEO_API reads that table without mounting the data folder.
+
+GEO_Visual runs in `geo_streamlit` and reads the dashboard views directly from Supabase (read-only SQL), independently of GEO_API.
 
 ### Resource isolation
 

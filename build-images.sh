@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the three GEO images one at a time.
+# Build the four GEO images one at a time.
 #
 # `docker compose build` builds independent services in parallel. That is fine on a
 # workstation, but the Anaconda-based images run conda's dependency solver concurrently,
@@ -11,7 +11,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-for service in airflow-init geo_fastapi geo_react_app; do
+for service in airflow-init geo_fastapi geo_streamlit geo_react_app; do
     echo "==> docker compose build ${service}"
     docker compose build "$@" "${service}"
 done

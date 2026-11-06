@@ -1,4 +1,4 @@
-"""Tests for the three-image Docker stack and its environment wiring."""
+"""Tests for the four-image Docker stack and its environment wiring."""
 
 from pathlib import Path
 
@@ -22,6 +22,7 @@ IMAGES = {
     "geo_airflow_spark": _DOCKER / "geo_airflow_spark" / "Dockerfile",
     "geo_fastapi": _DOCKER / "geo_fastapi" / "Dockerfile",
     "geo_react_app": _DOCKER / "geo_react_app" / "Dockerfile",
+    "geo_streamlit": _DOCKER / "geo_streamlit" / "Dockerfile",
 }
 
 
@@ -30,8 +31,8 @@ def _conn_line() -> str:
     return next(line for line in _COMPOSE.splitlines() if "SQL_ALCHEMY_CONN" in line)
 
 
-def test_three_images_and_dockerfiles_exist() -> None:
-    """Exactly the three requested images have a Dockerfile in their subfolder."""
+def test_four_images_and_dockerfiles_exist() -> None:
+    """Exactly the four requested images have a Dockerfile in their subfolder."""
     for image, dockerfile in IMAGES.items():
         assert dockerfile.is_file(), dockerfile
         assert f"image: {image}:latest" in _COMPOSE, image
@@ -106,6 +107,7 @@ def test_env_example_documents_the_supabase_variables() -> None:
         assert f"{var}=" in _ENV_EXAMPLE, var
     assert "AIRFLOW_DB_SCHEMA=geo_airflow" in _ENV_EXAMPLE
     assert "VITE_API_BASE=" in _ENV_EXAMPLE
+    assert "# GEO_VISUAL_HOST_PORT=8501" in _ENV_EXAMPLE
 
 
 def test_credentials_stay_out_of_git() -> None:
@@ -136,7 +138,7 @@ def test_setup_scripts_mirror_the_credentials_into_the_sibling_projects() -> Non
     for script, func in (("setup.sh", "sync_sibling_envs"), ("setup.ps1", "Sync-SiblingEnv")):
         text = (_ROOT / script).read_text()
         assert func in text, f"{script}: {func}"
-        for sibling in ("GEO_ETL", "GEO_API"):
+        for sibling in ("GEO_ETL", "GEO_API", "GEO_Visual"):
             assert sibling in text, f"{script}: {sibling}"
         assert early_exit_call[script] in text, f"{script}: early-exit must still mirror"
 
@@ -145,6 +147,7 @@ def test_container_startup_refreshes_env_from_compose() -> None:
     """Image builds contain paths only; airflow-init injects the Compose credentials."""
     airflow_dockerfile = IMAGES["geo_airflow_spark"].read_text()
     fastapi_dockerfile = IMAGES["geo_fastapi"].read_text()
+    streamlit_dockerfile = IMAGES["geo_streamlit"].read_text()
     assert "GEO_DOCKER=1 ./setup.sh --force" in airflow_dockerfile
     assert "/opt/geo/bin/refresh-env.sh" in _COMPOSE
     assert 'entrypoint: ["/opt/geo/bin/airflow-entrypoint.sh"]' in _COMPOSE
@@ -152,6 +155,30 @@ def test_container_startup_refreshes_env_from_compose() -> None:
     assert "GEO_DOCKER=1" in (_DOCKER / "geo_airflow_spark" / "refresh-env.sh").read_text()
     assert "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD" in (_DOCKER / "geo_fastapi" / "entrypoint.sh").read_text()
     assert "entrypoint.sh" in fastapi_dockerfile
+    assert "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD" in (_DOCKER / "geo_streamlit" / "entrypoint.sh").read_text()
+    assert "entrypoint.sh" in streamlit_dockerfile
+
+
+def test_geo_streamlit_image_runs_the_dashboard_on_port_8501() -> None:
+    """GEO_Visual is a runtime-only Streamlit image with a healthcheck and no API dependency."""
+    dockerfile = IMAGES["geo_streamlit"].read_text()
+    entrypoint = (_DOCKER / "geo_streamlit" / "entrypoint.sh").read_text()
+    environment = (_DOCKER / "geo_streamlit" / "environment.yml").read_text()
+    assert "EXPOSE 8501" in dockerfile
+    assert "_stcore/health" in dockerfile
+    assert "streamlit run app.py" in entrypoint
+    assert "--server.port" in entrypoint
+    assert "name: geo_visual_311" in environment
+    assert "streamlit>=1.37" in environment
+    assert "psycopg[binary]>=3.1" in environment
+    assert "image: geo_streamlit:latest" in _COMPOSE
+    assert "dockerfile: GEO_E2E/docker/geo_streamlit/Dockerfile" in _COMPOSE
+    assert '"${GEO_VISUAL_HOST_PORT:-8501}:8501"' in _COMPOSE
+    assert "mem_limit: ${GEO_VISUAL_MEM_LIMIT:-1g}" in _COMPOSE
+    assert "geo_streamlit:" in _COMPOSE
+    # GEO_Visual reads Supabase views directly; it must not depend on the API container.
+    streamlit_block = _COMPOSE.split("  geo_streamlit:", 1)[1].split("\nvolumes:", 1)[0]
+    assert "geo_fastapi:" not in streamlit_block
 
 
 def test_image_env_files_are_writable_by_the_host_uid_group() -> None:
@@ -164,11 +191,12 @@ def test_image_env_files_are_writable_by_the_host_uid_group() -> None:
 
 
 def test_container_dependencies() -> None:
-    """Airflow waits for Spark; React waits for the API; the API and Airflow use Supabase."""
+    """Airflow waits for Spark; React waits for the API; Streamlit reads Supabase directly."""
     assert "SPARK_MASTER_URL: spark://geo-spark-master:7078" in _COMPOSE
     assert "AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8090/execution/" in _COMPOSE
     assert "condition: service_healthy" in _COMPOSE  # Spark/API health gating
     assert "geo_fastapi:" in _COMPOSE
+    assert "geo_streamlit:" in _COMPOSE
     assert "VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}" in _COMPOSE
 
 
@@ -196,6 +224,7 @@ def test_runtime_is_memory_bounded() -> None:
     assert "mem_limit: ${SPARK_WORKER_MEM_LIMIT:-3g}" in _COMPOSE
     assert "mem_limit: ${GEO_API_MEM_LIMIT:-1g}" in _COMPOSE
     assert "mem_limit: ${GEO_APP_MEM_LIMIT:-128m}" in _COMPOSE
+    assert "mem_limit: ${GEO_VISUAL_MEM_LIMIT:-1g}" in _COMPOSE
 
     # LocalExecutor workers and per-DAG concurrency are capped below Airflow's defaults.
     assert "AIRFLOW__CORE__PARALLELISM: ${AIRFLOW_PARALLELISM:-8}" in _COMPOSE
@@ -211,6 +240,7 @@ def test_runtime_is_memory_bounded() -> None:
         "AIRFLOW_SCHEDULER_MEM_LIMIT=4g",
         "SPARK_WORKER_MEM_LIMIT=3g",
         "SPARK_DRIVER_MEMORY=1g",
+        "GEO_VISUAL_MEM_LIMIT=1g",
     ):
         assert var in _ENV_EXAMPLE, var
 
@@ -220,6 +250,6 @@ def test_serial_build_helper_exists() -> None:
     script = _ROOT / "build-images.sh"
     assert script.is_file()
     text = script.read_text()
-    for service in ("airflow-init", "geo_fastapi", "geo_react_app"):
+    for service in ("airflow-init", "geo_fastapi", "geo_streamlit", "geo_react_app"):
         assert service in text
     assert "docker compose build" in text

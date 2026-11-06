@@ -15,7 +15,7 @@ docker compose up -d
 
 `docker compose up -d --build` works too, but builds independent images in parallel and can spike RAM on the first run.
 
-This builds the three images (first run only) and starts the one-shot `airflow-init` (Supabase schema creation, DB migration, admin user, pool seeding, `.env` refresh), the DAG processor, the scheduler, the API server, the DAG activation job, the Spark cluster, GEO_API and GEO_APP. Follow the scheduler to watch task execution:
+This builds the four images (first run only) and starts the one-shot `airflow-init` (Supabase schema creation, DB migration, admin user, pool seeding, `.env` refresh), the DAG processor, the scheduler, the API server, the DAG activation job, the Spark cluster, GEO_API, GEO_APP and GEO_Visual. Follow the scheduler to watch task execution:
 
 ```bash
 docker compose logs -f airflow-scheduler
@@ -23,7 +23,7 @@ docker compose ps
 docker stats --no-stream     # every container stays inside its memory limit
 ```
 
-> On a laptop build the images serially with `./build-images.sh` instead of `docker compose build`; the Anaconda-based images can otherwise run two dependency solvers at once. See [README — Memory and resource limits](../README.md#3-memory-and-resource-limits).
+> On a laptop build the images serially with `./build-images.sh` instead of `docker compose build`; the Anaconda-based images can otherwise run multiple dependency solvers at once. See [README — Memory and resource limits](../README.md#3-memory-and-resource-limits).
 
 > The images are self-contained. Airflow task subprocesses use the image's `/opt/conda` environments and reach Spark at `spark://geo-spark-master:7078` over the Compose bridge network. The Spark UI is published at 8083; the Airflow UI at 8090. The host `GEO_Download/data` folder is bind-mounted at `/opt/geo/GEO_Download/data`, so downloaded CSVs are immediately visible in the local repo. See [README — Dockerizing the solution](../README.md#2-build-and-start-the-stack).
 
@@ -42,7 +42,7 @@ Use `./build-images.sh` when RAM is tight (serial builds). `docker compose resta
 
 ## The web UI
 
-Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env`). The API is at **http://localhost:8000** (`/docs` for Swagger) and the dashboard at **http://localhost:3000**:
+Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env`). The API is at **http://localhost:8000** (`/docs` for Swagger), the React dashboard at **http://localhost:3000**, and the Streamlit dashboard at **http://localhost:8501**:
 
 | Page | Use it for |
 |------|------------|

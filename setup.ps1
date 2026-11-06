@@ -95,7 +95,8 @@ $envPath = Join-Path $projectDir $envFile
 
 $geoEtlEnv = Join-Path (Join-Path $geoRoot 'GEO_ETL') '.env'
 $geoApiEnv = Join-Path (Join-Path $geoRoot 'GEO_API') '.env'
-$supabaseEnvFiles = @($geoEtlEnv, $geoApiEnv)
+$geoVisualEnv = Join-Path (Join-Path $geoRoot 'GEO_Visual') '.env'
+$supabaseEnvFiles = @($geoEtlEnv, $geoApiEnv, $geoVisualEnv)
 $supabaseKeys = @(
     'SUPABASE_DB_USER',
     'SUPABASE_DB_PASSWORD',
@@ -111,9 +112,9 @@ function Get-SupabaseValueMap {
     return $map
 }
 
-# GEO_ETL and GEO_API read the same five Supabase values from their own gitignored .env files —
-# GEO_E2E is where they are set up, so mirror them into both sibling files (upsert: other lines
-# are preserved, a missing file is created with a pointer comment).
+# GEO_ETL, GEO_API and GEO_Visual read the same five Supabase values from their own gitignored
+# .env files — GEO_E2E is where they are set up, so mirror them into all three sibling files
+# (upsert: other lines are preserved, a missing file is created with a pointer comment).
 function Sync-SiblingEnv {
     param([hashtable] $Values)
     $any = $false
@@ -245,9 +246,9 @@ $password = Read-PromptValue $defaultPassword 'Airflow UI password (_AIRFLOW_WWW
 
 # Supabase credentials are secrets: never prompted (they would land in the scrollback) —
 # the primary place to set them is this file (.env); a previous value of .env or
-# of a sibling GEO_ETL/.env / GEO_API/.env is re-used, else they stay empty (compose then
-# fails with a message naming the missing variable). Sync-SiblingEnv mirrors the result back
-# into both siblings, so every project runs with the same credentials.
+# of a sibling GEO_ETL/.env, GEO_API/.env or GEO_Visual/.env is re-used, else they stay empty
+# (compose then fails with a message naming the missing variable). Sync-SiblingEnv mirrors the
+# result back into all siblings, so every project runs with the same credentials.
 function Get-SupabaseValue {
     param([string] $Key)
     $value = Get-PreviousValue $Key
@@ -270,7 +271,7 @@ $supabaseName = Get-SupabaseValue 'SUPABASE_DB_NAME'
 $schema = Get-PreviousValue 'AIRFLOW_DB_SCHEMA'
 if (-not $schema) { $schema = 'geo_airflow' }
 if (-not $supabaseUser -or -not $supabasePassword -or -not $supabaseHost) {
-    Write-Warning "SUPABASE_DB_* not found in $envFile, $geoEtlEnv or $geoApiEnv — fill them in $envFile (template: .env.example) before docker compose"
+    Write-Warning "SUPABASE_DB_* not found in $envFile, $geoEtlEnv, $geoApiEnv or $geoVisualEnv — fill them in $envFile (template: .env.example) before docker compose"
 }
 
 $stamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Writes the machine-specific env file (paths, uid, Airflow UI login, Supabase credentials)
 # detected from this checkout, so the stack runs wherever the repo was cloned — and mirrors the
-# Supabase credentials into the sibling GEO_ETL/.env and GEO_API/.env (setup lives here).
+# Supabase credentials into the sibling GEO_ETL/.env, GEO_API/.env and GEO_Visual/.env
+# (setup lives here).
 # Git-ignored; docker compose auto-loads .env from the project root (see README — Setup).
 #
 # In a Docker container it writes .env.docker instead, non-interactively (defaults only).
@@ -48,9 +49,9 @@ GEO_ROOT="$(dirname "$PROJECT_DIR")"
 
 SUPABASE_KEYS=(SUPABASE_DB_USER SUPABASE_DB_PASSWORD SUPABASE_DB_HOST SUPABASE_DB_PORT SUPABASE_DB_NAME)
 
-# GEO_ETL and GEO_API read the same five Supabase values from their own gitignored .env files —
-# GEO_E2E is where they are set up, so mirror them into both sibling files (upsert: other lines
-# are preserved, a missing file is created with a pointer comment).
+# GEO_ETL, GEO_API and GEO_Visual read the same five Supabase values from their own gitignored
+# .env files — GEO_E2E is where they are set up, so mirror them into all three sibling files
+# (upsert: other lines are preserved, a missing file is created with a pointer comment).
 sync_sibling_envs() {
     local any=0 sibling target tmp key value keys_re
     for key in "${SUPABASE_KEYS[@]}"; do
@@ -63,7 +64,7 @@ sync_sibling_envs() {
     fi
     # joined with `|` for grep (the ${arr[*]//pat/rep} form would run per element, not on the join)
     keys_re="^($(IFS='|'; echo "${SUPABASE_KEYS[*]}"))="
-    for sibling in GEO_ETL GEO_API; do
+    for sibling in GEO_ETL GEO_API GEO_Visual; do
         target="$GEO_ROOT/$sibling/.env"
         if [[ ! -d "$GEO_ROOT/$sibling" ]]; then
             # The Airflow image contains only GEO_ETL (not GEO_API), so stay quiet there.
@@ -126,9 +127,10 @@ prompt() {
 
 # Supabase credentials are secrets: they are never prompted (they would land in the terminal
 # scrollback) — the primary place to set them is this file (.env); a previous value of
-# .env or of a sibling GEO_ETL/.env / GEO_API/.env is re-used, else they stay empty
-# (docker compose then fails with a message naming the missing variable). sync_sibling_envs()
-# mirrors the result back into both siblings, so every project runs with the same credentials.
+# .env or of a sibling GEO_ETL/.env, GEO_API/.env or GEO_Visual/.env is re-used, else they
+# stay empty (docker compose then fails with a message naming the missing variable).
+# sync_sibling_envs() mirrors the result back into all siblings, so every project runs with
+# the same credentials.
 supabase_value() {
     local key="$1" value="" sibling
     # Runtime/CI environment wins (Docker Compose supplies the credentials this way).
@@ -136,7 +138,7 @@ supabase_value() {
     if [[ -z "$value" ]]; then
         value="$(previous_value "$key")"
     fi
-    for sibling in GEO_ETL GEO_API; do
+    for sibling in GEO_ETL GEO_API GEO_Visual; do
         if [[ -z "$value" && -f "$GEO_ROOT/$sibling/.env" ]]; then
             # `|| true`: a missing key must not fail the script (set -e + pipefail)
             value="$(grep -E "^${key}=" "$GEO_ROOT/$sibling/.env" | head -n1 | cut -d= -f2- || true)"
@@ -225,7 +227,7 @@ AIRFLOW_DB_SCHEMA="${AIRFLOW_DB_SCHEMA:-geo_airflow}"
 if [[ -z "$SUPABASE_DB_USER" || -z "$SUPABASE_DB_PASSWORD" || -z "$SUPABASE_DB_HOST" ]]; then
     # In image mode Compose itself requires the five values before starting the container,
     # so a build-time warning would only be noise.
-    [[ "$DOCKER_MODE" == "1" ]] || echo "warning: SUPABASE_DB_* not found in $ENV_FILE, $GEO_ROOT/GEO_ETL/.env or $GEO_ROOT/GEO_API/.env — fill them in $ENV_FILE" \
+    [[ "$DOCKER_MODE" == "1" ]] || echo "warning: SUPABASE_DB_* not found in $ENV_FILE, $GEO_ROOT/GEO_ETL/.env, $GEO_ROOT/GEO_API/.env or $GEO_ROOT/GEO_Visual/.env — fill them in $ENV_FILE" \
         "(template: .env.example) before docker compose" >&2
 fi
 
