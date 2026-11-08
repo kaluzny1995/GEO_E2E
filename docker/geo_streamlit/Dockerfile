@@ -39,6 +39,9 @@ COPY --chown=geovisual:geovisual \
     /opt/geo/GEO_Visual/
 
 COPY --chown=geovisual:geovisual GEO_Visual/model/ /opt/geo/GEO_Visual/model/
+COPY --chown=geovisual:geovisual GEO_Visual/dashboard/ /opt/geo/GEO_Visual/dashboard/
+COPY --chown=geovisual:geovisual GEO_Visual/pages/ /opt/geo/GEO_Visual/pages/
+COPY --chown=geovisual:geovisual GEO_Visual/sql/ /opt/geo/GEO_Visual/sql/
 COPY --chown=geovisual:geovisual GEO_Visual/provider/ /opt/geo/GEO_Visual/provider/
 COPY --chown=geovisual:geovisual GEO_Visual/utils/ /opt/geo/GEO_Visual/utils/
 COPY --chown=geovisual:geovisual GEO_Visual/.streamlit/ /opt/geo/GEO_Visual/.streamlit/

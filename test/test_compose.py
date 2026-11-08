@@ -178,10 +178,11 @@ def test_geo_streamlit_image_runs_the_dashboard_on_port_8501() -> None:
     environment = (_DOCKER / "geo_streamlit" / "environment.yml").read_text()
     assert "EXPOSE 8501" in dockerfile
     assert "_stcore/health" in dockerfile
+    assert "GEO_Visual/sql/" in dockerfile
     assert "streamlit run app.py" in entrypoint
     assert "--server.port" in entrypoint
     assert "name: geo_visual_311" in environment
-    assert "streamlit>=1.37" in environment
+    assert "streamlit>=1.51" in environment
     assert "psycopg[binary]>=3.1" in environment
     assert "image: geo_streamlit:latest" in _COMPOSE
     assert "dockerfile: GEO_E2E/docker/geo_streamlit/Dockerfile" in _COMPOSE
