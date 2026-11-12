@@ -44,7 +44,7 @@ Use `./build-images.sh` when RAM is tight (serial builds; it runs the preflight 
 
 ## The web UI
 
-Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env`). The API is at **http://localhost:8000** (`/docs` for Swagger), the React dashboard at **http://localhost:3000**, and the Streamlit dashboard at **http://localhost:8501**. GEO_Visual opens on its welcome page; use the sidebar or dashboard cards to open the appropriate dashboard.
+Open **http://localhost:8090** and log in with `airflow_admin` / `airflow_admin` (the `_AIRFLOW_WWW_USER_*` values from `.env`). The API is at **http://localhost:8000** (`/docs` for Swagger), the React dashboard at **http://localhost:3000**, and the Streamlit dashboard at **http://localhost:8501**. GEO_Visual opens on its welcome page; expand the collapsible dashboard/map cards or use the sidebar to open one of the eight metric dashboards or nine area phenomenon maps.
 
 | Page | Use it for |
 |------|------------|
