@@ -14,12 +14,16 @@ ROOT = Path(__file__).resolve().parents[1]
 CRON = "0 8 * * *"
 #: The task id of the union chain's single-ETL job — the mega-DAG's synthesized fan-in root.
 UNION_ROOT_ID = "Union.single_etl"
+#: The prediction task inserted between the observed view and the combined metric views.
+PREDICTION_TASK_ID = "Union.prediction"
+#: The shared observed-metrics view task.
+OBSERVED_VIEW_TASK_ID = "View.metrics_observed_vw"
 #: The shell prefix of every GEO_ETL task command (hop to the sibling repo, run in its conda env).
 ETL_CMD_PREFIX = "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py"
 #: The number of data-source chains in the shipped registry (every source but Union).
 SOURCE_COUNT = 9
 #: The number of VIEW jobs in the shipped registry (they all read geo.union_etl).
-VIEW_COUNT = 17
+VIEW_COUNT = 18
 
 
 def load_shipped_jobs() -> list[dict]:

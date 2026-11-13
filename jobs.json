@@ -485,14 +485,7 @@
     "is_next_skipped_if_error": true,
     "next_jobs": [
       "DATA_QUALITY-union_etl",
-      "VIEW-metrics_avalanche_vw",
-      "VIEW-metrics_drought_vw",
-      "VIEW-metrics_earthquake_vw",
-      "VIEW-metrics_fire_vw",
-      "VIEW-metrics_flood_vw",
-      "VIEW-metrics_iceberg_vw",
-      "VIEW-metrics_storm_vw",
-      "VIEW-metrics_volcano_vw",
+      "VIEW-metrics_observed_vw",
       "VIEW-phenomenons_us_vw",
       "VIEW-phenomenons_ca_vw",
       "VIEW-phenomenons_cs_amer_vw",
@@ -502,6 +495,35 @@
       "VIEW-phenomenons_africa_vw",
       "VIEW-phenomenons_aus_oc_vw",
       "VIEW-phenomenons_waters_vw"
+    ]
+  },
+  {
+    "name": "VIEW-metrics_observed_vw",
+    "task_id": "View.metrics_observed_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_observed_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "PREDICTION-prediction_etl"
+    ]
+  },
+  {
+    "name": "PREDICTION-prediction_etl",
+    "task_id": "Union.prediction",
+    "source_name": "Union",
+    "job_type": "PREDICTION",
+    "table_name": "prediction_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": [
+      "VIEW-metrics_avalanche_vw",
+      "VIEW-metrics_drought_vw",
+      "VIEW-metrics_earthquake_vw",
+      "VIEW-metrics_fire_vw",
+      "VIEW-metrics_flood_vw",
+      "VIEW-metrics_iceberg_vw",
+      "VIEW-metrics_storm_vw",
+      "VIEW-metrics_volcano_vw"
     ]
   },
   {

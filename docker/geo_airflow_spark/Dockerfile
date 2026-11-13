@@ -49,9 +49,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends procps curl tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Spark runs as the airflow user and needs writable work/log directories.
+# Spark runs as the airflow user and needs writable work/log directories. Keep
+# them world-writable so a custom runtime UID can still start a worker.
 RUN mkdir -p /opt/spark/work /opt/spark/logs \
-    && chown -R airflow:root /opt/spark/work /opt/spark/logs
+    && chown -R airflow:root /opt/spark/work /opt/spark/logs \
+    && chmod 1777 /opt/spark/work /opt/spark/logs
 
 # Runtime-only conda environments. The repository environment.yml files also contain
 # pytest/ruff/tox/mypy; those are intentionally absent from the image.
@@ -115,6 +117,9 @@ COPY --chown=airflow:root GEO_ETL/model/ /opt/geo/GEO_ETL/model/
 COPY --chown=airflow:root GEO_ETL/single_etl/ /opt/geo/GEO_ETL/single_etl/
 COPY --chown=airflow:root GEO_ETL/utils/ /opt/geo/GEO_ETL/utils/
 COPY --chown=airflow:root GEO_ETL/views/ /opt/geo/GEO_ETL/views/
+COPY --chown=airflow:root GEO_ETL/ml/ /opt/geo/GEO_ETL/ml/
+RUN mkdir -p /opt/geo/GEO_ETL/ml_models \
+    && chown -R airflow:root /opt/geo/GEO_ETL/ml_models
 
 COPY --chown=airflow:root \
     GEO_E2E/docker/geo_airflow_spark/refresh-env.sh \

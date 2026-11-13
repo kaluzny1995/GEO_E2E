@@ -27,6 +27,7 @@ class EJobType(StrEnum):
     DATA_SOURCE_FILE = "DATA_SOURCE_FILE"
     SINGLE_ETL = "SINGLE_ETL"
     VIEW = "VIEW"
+    PREDICTION = "PREDICTION"
     # Not a jobs.json type — build_task_specs() synthesizes the verdict task with it
     VERDICT = "VERDICT"
 
@@ -60,6 +61,7 @@ class JobConfig(BaseModel):
     data_source_file: JobTypeConfig
     single_etl: JobTypeConfig
     view: JobTypeConfig
+    prediction: JobTypeConfig
 
     model_config = ConfigDict(frozen=True)
 
@@ -90,6 +92,7 @@ class PoolConfig(BaseModel):
     data_source_file: str
     single_etl: str
     view: str
+    prediction: str
     verdict: str
 
     model_config = ConfigDict(frozen=True)
@@ -132,6 +135,7 @@ class DagSettings(BaseModel):
             EJobType.DATA_SOURCE_FILE: self.pools.data_source_file,
             EJobType.SINGLE_ETL: self.pools.single_etl,
             EJobType.VIEW: self.pools.view,
+            EJobType.PREDICTION: self.pools.prediction,
             EJobType.VERDICT: self.pools.verdict,
         }[job_type]
 
@@ -190,7 +194,7 @@ class Job(BaseModel):
 
         Raises:
             ValueError: When a non-DOWNLOAD job (INGESTION, DATA_QUALITY,
-                DATA_SOURCE_FILE, SINGLE_ETL or VIEW) has no table_name
+                DATA_SOURCE_FILE, SINGLE_ETL, VIEW or PREDICTION) has no table_name
                 configured in jobs.json, or when the job is a VERDICT job (the
                 verdict task is synthesized by build_task_specs()).
         """
@@ -211,9 +215,9 @@ class Job(BaseModel):
                 f'{self.job_type.value} job for "{self.source_name}" has no table_name configured in jobs.json'
             )
 
-        # INGESTION / DATA_QUALITY / DATA_SOURCE_FILE / SINGLE_ETL / VIEW — every one's
-        # JobTypeConfig field of JobConfig is the lowercased job type (the VERDICT and
-        # DOWNLOAD cases are handled above)
+        # INGESTION / DATA_QUALITY / DATA_SOURCE_FILE / SINGLE_ETL / VIEW / PREDICTION —
+        # every one's JobTypeConfig field of JobConfig is the lowercased job type (the
+        # VERDICT and DOWNLOAD cases are handled above)
         type_config: JobTypeConfig = getattr(job_config, self.job_type.value.lower())
         return type_config.get_command_string(self.job_type.value, self.table_name)
 
@@ -352,25 +356,32 @@ def resolve_schedule() -> str:
     return schedules[0]
 
 
-def _verdict_command(union_root_task_id: str) -> str:
+def _verdict_command(required_task_ids: tuple[str, ...]) -> str:
     """Shell command of the verdict task — a Jinja template the BashOperator renders right before it runs.
 
     `all_done` guarantees every other task of the DAG reached a terminal state by then, so
     `ti.get_task_states()` (the Airflow task SDK — a comms call the supervisor serves in real
-    runs and in `airflow tasks test`) can read the union root's state of the *current* run:
-    the command exits 0 only when it is `success`, 1 otherwise (including a missing TI).
+    runs and in `airflow tasks test`) can read the required task states of the *current* run:
+    the command exits 0 only when every required task is `success`, 1 otherwise.
     """
-    return (
-        "{% set task = '" + union_root_task_id + "' %}\n"
-        "{% set state = ti.get_task_states(ti.dag_id, task_ids=[task], run_ids=[run_id]).get(run_id, {})"
-        ".get(task) %}\n"
-        "{% if state == 'success' %}\n"
-        'echo "verdict: {{ task }} = {{ state }} -> DAG run succeeds"\n'
-        "{% else %}\n"
-        'echo "verdict: {{ task }} = {{ state }} -> DAG run fails" >&2\n'
-        "exit 1\n"
-        "{% endif %}\n"
-    )
+    lines = []
+    for index, task_id in enumerate(required_task_ids):
+        lines.append(
+            f"{{% set task_{index} = '{task_id}' %}}\n"
+            f"{{% set state_{index} = ti.get_task_states(ti.dag_id, task_ids=[task_{index}], run_ids=[run_id])"
+            f".get(run_id, {{}}).get(task_{index}) %}}\n"
+        )
+    condition = " and ".join(f"state_{index} == 'success'" for index in range(len(required_task_ids)))
+    labels = " · ".join(required_task_ids)
+    lines.append(f"{{% if {condition} %}}\n")
+    lines.append(f'echo "verdict: {labels} = success -> DAG run succeeds"\n')
+    lines.append("{% else %}\n")
+    for index in range(len(required_task_ids)):
+        lines.append(f'echo "verdict: {{{{ task_{index} }}}} = {{{{ state_{index} }}}}" >&2\n')
+    lines.append('echo "verdict: at least one required task failed -> DAG run fails" >&2\n')
+    lines.append("exit 1\n")
+    lines.append("{% endif %}\n")
+    return "".join(lines)
 
 
 def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
@@ -455,12 +466,18 @@ def build_task_specs(union_source: str = "Union") -> list[TaskSpec]:
     registry_specs = specs + union_specs
 
     # The verdict task: downstream of every registry task (so it is the DAG's only leaf — and
-    # only leaf tasks decide a run's state) and gated on the union root's state by its command
+    # only leaf tasks decide a run's state) and gated on the union single-ETL plus every
+    # prediction task by its command. A failed prediction must fail the run even though the
+    # phenomenon views, which do not depend on predictions, still succeed.
+    required_task_ids = (
+        union_root_id,
+        *(spec.task_id for spec in registry_specs if spec.job_type == EJobType.PREDICTION),
+    )
     verdict = TaskSpec(
         task_id=verdict_id,
         source_name=union_source,
         job_type=EJobType.VERDICT,
-        command=_verdict_command(union_root_id),
+        command=_verdict_command(required_task_ids),
         upstream=tuple(spec.task_id for spec in registry_specs),
         trigger_rule="all_done",
     )

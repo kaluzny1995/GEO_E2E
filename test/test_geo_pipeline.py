@@ -18,7 +18,13 @@ from jinja2 import Environment
 
 from geo_dag import GEO_DAG, JobsSubDAG
 from model import EJobType, TaskSpec, build_task_specs, get_dag_settings
-from test._helpers import CRON, SOURCE_COUNT, UNION_ROOT_ID, VIEW_COUNT
+from test._helpers import (
+    CRON,
+    PREDICTION_TASK_ID,
+    SOURCE_COUNT,
+    UNION_ROOT_ID,
+    VIEW_COUNT,
+)
 
 _PROJECT_DIR = Path(__file__).resolve().parents[1]
 
@@ -81,6 +87,7 @@ def test_each_subdag_holds_one_source_chain(rendered_dag: tuple[GEO_DAG, DAG, di
         if subdag is geo_dag.union_subdag:
             assert subdag.task_ids == {
                 UNION_ROOT_ID,
+                PREDICTION_TASK_ID,
                 "Union_etl.data_quality",
                 "Union.verdict",
                 *(spec.task_id for spec in build_task_specs() if spec.job_type == EJobType.VIEW),
@@ -150,8 +157,8 @@ def test_union_data_quality_wired_under_the_union_single_etl(
 def test_view_tasks_render_under_the_union_single_etl_in_the_etl_pool(
     rendered_dag: tuple[GEO_DAG, DAG, dict[str, BashOperator]],
 ) -> None:
-    """Every VIEW job renders into a BashOperator waiting for the union single-ETL with
-    all_success, running in the etl pool — the seventeen views read geo.union_etl together."""
+    """Every VIEW job renders in the etl pool; combined metrics views wait for PREDICTION,
+    observed/phenomenon views wait for the union single-ETL."""
     # Arrange & Act
     _, _, tasks = rendered_dag
     view_tasks = [task for task_id, task in tasks.items() if task_id.startswith("View.")]
@@ -159,10 +166,15 @@ def test_view_tasks_render_under_the_union_single_etl_in_the_etl_pool(
     # Assert
     assert len(view_tasks) == VIEW_COUNT
     for task in view_tasks:
-        assert task.upstream_task_ids == {UNION_ROOT_ID}
+        view_name = task.task_id.rsplit(".", 1)[-1]
+        expected_upstream = (
+            {PREDICTION_TASK_ID}
+            if view_name.startswith("metrics_") and view_name != "metrics_observed_vw"
+            else {UNION_ROOT_ID}
+        )
+        assert task.upstream_task_ids == expected_upstream
         assert task.trigger_rule == TriggerRule.ALL_SUCCESS
         assert task.pool == get_dag_settings().pool_for(EJobType.VIEW)
-        view_name = task.task_id.rsplit(".", 1)[-1]
         assert str(task.bash_command).endswith(f"run_etl.py VIEW {view_name}")
 
 
@@ -212,7 +224,7 @@ def test_verdict_command_succeeds_when_the_union_single_etl_succeeded() -> None:
 
     # Assert
     assert "exit 1" not in succeeded
-    assert f"{UNION_ROOT_ID} = success -> DAG run succeeds" in succeeded
+    assert f"{UNION_ROOT_ID} · {PREDICTION_TASK_ID} = success -> DAG run succeeds" in succeeded
 
 
 @pytest.mark.parametrize(
@@ -234,7 +246,7 @@ def test_verdict_command_fails_unless_the_union_single_etl_succeeded(state: str 
 
     # Assert
     assert "exit 1" in rendered
-    assert f"{UNION_ROOT_ID} = " in rendered and "-> DAG run fails" in rendered
+    assert f"{UNION_ROOT_ID}" in rendered and "-> DAG run fails" in rendered
 
 
 def test_jobs_subdag_rejects_specs_of_several_sources_or_no_specs() -> None:

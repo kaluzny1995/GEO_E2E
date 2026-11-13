@@ -53,6 +53,7 @@ The `job` block defines **how** each job type is executed (command, folder, cond
 | `data_source_file` | `GEO_ETL`  | `run_etl.py`    | `geo_etl_311`     |
 | `single_etl`  | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
 | `view`        | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
+| `prediction`  | `GEO_ETL`      | `run_etl.py`    | `geo_etl_311`     |
 
 | Field           | Description                                                        |
 |-----------------|--------------------------------------------------------------------|
@@ -62,7 +63,7 @@ The `job` block defines **how** each job type is executed (command, folder, cond
 
 ## Job Registry (`jobs.json`)
 
-The flat registry of every job the pipeline runs — a JSON **array** of job objects, one per job, keyed relationships via `name` instead of nesting. Each source contributes a chain of six jobs (`DOWNLOAD` → `INGESTION` → `DATA_QUALITY` + `SINGLE_ETL` → etl-table `DATA_QUALITY`, plus `DATA_SOURCE_FILE` released by the download); the `Union` entry stacks the results and builds the views on top of them. The first source's jobs:
+The flat registry of every job the pipeline runs — a JSON **array** of job objects, one per job, keyed relationships via `name` instead of nesting. Each source contributes a chain of six jobs (`DOWNLOAD` → `INGESTION` → `DATA_QUALITY` + `SINGLE_ETL` → etl-table `DATA_QUALITY`, plus `DATA_SOURCE_FILE` released by the download); the `Union` entry stacks the results, builds the observed/map views, runs the MLlib prediction and then the combined metric views. The first source's jobs:
 
 ```json
 [
@@ -128,8 +129,8 @@ The flat registry of every job the pipeline runs — a JSON **array** of job obj
 | `name`                    | Unique job id — the reference key other jobs use in `next_jobs` (convention: `<job_type>-<table_name>`, `DOWNLOAD-<source_name>` for downloads); **not** the Airflow task id |
 | `task_id`                 | Unique Airflow task id this job becomes (convention: `<source>.<step>`, e.g. `NIFC.single_etl`, `NIFC_etl.data_quality`, `View.<view_name>`); dot-separated segments of letters, digits and underscores — see [Task ids](#task-ids) |
 | `source_name`             | Data source this job belongs to; the chain root's value names the source (`NIFC`) and groups its tasks in the UI |
-| `job_type`                | `DOWNLOAD`, `INGESTION`, `DATA_QUALITY`, `DATA_SOURCE_FILE`, `SINGLE_ETL` or `VIEW` — selects the matching `job.*` command block (`VERDICT` is not declarable: `build_task_specs()` synthesizes that task itself) |
-| `table_name`              | Required for every job type except `DOWNLOAD` — argument passed to `run_etl.py <JOB_TYPE> <table>` (plain table name for `INGESTION`/`DATA_QUALITY`, the source folder name for `DATA_SOURCE_FILE`, `<table>_etl` for `SINGLE_ETL`, the view script name for `VIEW`); omitted for `DOWNLOAD` (the command takes the `source_name` instead) |
+| `job_type`                | `DOWNLOAD`, `INGESTION`, `DATA_QUALITY`, `DATA_SOURCE_FILE`, `SINGLE_ETL`, `VIEW` or `PREDICTION` — selects the matching `job.*` command block (`VERDICT` is not declarable: `build_task_specs()` synthesizes that task itself) |
+| `table_name`              | Required for every job type except `DOWNLOAD` — argument passed to `run_etl.py <JOB_TYPE> <table>` (plain table name for `INGESTION`/`DATA_QUALITY`, the source folder name for `DATA_SOURCE_FILE`, `<table>_etl` for `SINGLE_ETL`, the view script name for `VIEW`, `prediction_etl` for `PREDICTION`); omitted for `DOWNLOAD` (the command takes the `source_name` instead) |
 | `schedule`                | Cron for a **scheduled** job — a pipeline root that starts on this cron (shipped: the nine `DOWNLOAD` jobs, all `0 8 * * *`). **Omit the field for downstreamed jobs** — they start when the job referencing them in `next_jobs` finishes |
 | `is_next_skipped_if_error`| **Documentation only** — marks that a failure skips the jobs named in `next_jobs`; the DAG always uses the `all_success` trigger rule below, which does exactly that |
 | `next_jobs`               | Names of the jobs that depend on this job — turned into downstream Airflow tasks (chains via references to any depth) |
@@ -158,14 +159,15 @@ Each job becomes one Airflow task whose id is its own `task_id` field in `jobs.j
 | etl-table `DATA_QUALITY` | `NIFC_etl.data_quality` |
 | union fan-in | `Union.single_etl` |
 | union data quality | `Union_etl.data_quality` |
-| `VIEW` jobs | `View.<view_name>` — e.g. `View.metrics_flood_vw`; the seventeen views are siblings, so each id carries its script name |
+| prediction | `Union.prediction` |
+| `VIEW` jobs | `View.<view_name>` — e.g. `View.metrics_flood_vw`; the eighteen views are keyed by script name |
 | verdict (no job) | `Union.verdict` — synthesized by `build_task_specs()`, not present in `jobs.json`; waits for all other tasks and decides the run's state |
 
 The id must be dot-separated segments of letters, digits and underscores (`[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*`) — validated by `model.Job` at load; `Union.verdict` is reserved for the synthesized verdict task.
 
 ### Union job (`Union`)
 
-Besides the nine source chains, `jobs.json` holds the `Union` entry — the fan-in job that stacks every `*_etl` table into `geo.union_etl`, followed by its `DATA_QUALITY` job and the `VIEW` jobs that build the views on top of the stacked table (example below shows one view for brevity — the shipped registry chains all seventeen):
+Besides the nine source chains, `jobs.json` holds the `Union` entry — the fan-in job that stacks every `*_etl` table into `geo.union_etl`, followed by its `DATA_QUALITY` job, the observed/phenomenon views, the MLlib prediction and the eight combined metric views (the example below is abridged — the shipped registry chains all ten first-stage views and all eight combined metric views):
 
 ```json
 [
@@ -176,7 +178,7 @@ Besides the nine source chains, `jobs.json` holds the `Union` entry — the fan-
     "job_type": "SINGLE_ETL",
     "table_name": "union_etl",
     "is_next_skipped_if_error": true,
-    "next_jobs": ["DATA_QUALITY-union_etl", "VIEW-metrics_avalanche_vw"]
+    "next_jobs": ["DATA_QUALITY-union_etl", "VIEW-metrics_observed_vw", "VIEW-phenomenons_us_vw"]
   },
   {
     "name": "DATA_QUALITY-union_etl",
@@ -186,6 +188,24 @@ Besides the nine source chains, `jobs.json` holds the `Union` entry — the fan-
     "table_name": "union_etl",
     "is_next_skipped_if_error": true,
     "next_jobs": []
+  },
+  {
+    "name": "VIEW-metrics_observed_vw",
+    "task_id": "View.metrics_observed_vw",
+    "source_name": "Union",
+    "job_type": "VIEW",
+    "table_name": "metrics_observed_vw",
+    "is_next_skipped_if_error": true,
+    "next_jobs": ["PREDICTION-prediction_etl"]
+  },
+  {
+    "name": "PREDICTION-prediction_etl",
+    "task_id": "Union.prediction",
+    "source_name": "Union",
+    "job_type": "PREDICTION",
+    "table_name": "prediction_etl",
+    "is_next_skipped_if_error": true,
+    "next_jobs": ["VIEW-metrics_avalanche_vw"]
   },
   {
     "name": "VIEW-metrics_avalanche_vw",
@@ -201,9 +221,13 @@ Besides the nine source chains, `jobs.json` holds the `Union` entry — the fan-
 
 `SINGLE_ETL union_etl` stacks the nine `*_etl` tables into `geo.union_etl` (see [GEO_ETL — union_etl](../../GEO_ETL/docs/etl_jobs/single-etl/union-etl.md)); a non-zero exit — e.g. nothing newer to stack — fails the task (visible in the UI, re-runnable). The DAG gives the union root the `all_done_min_one_success` trigger rule and the nine `SINGLE_ETL` tasks (`NIFC.single_etl`, …) as upstreams: it starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — but only if at least one of them succeeded; when all nine failed, the scheduler marks it `upstream_failed` without running it. No markers, no polling, no deadline. It is then followed by `DATA_QUALITY union_etl`, which measures `geo.union_etl` right after the stack. The DATA_QUALITY jobs are not part of the fan-in: they stay terminal steps of `jobs.json` (nothing chains from them — only the verdict gate waits), like in the old Celery chains.
 
-### View step
+### View, prediction and metric-view steps
 
-Every `VIEW` job is chained under the union root (`SINGLE_ETL-union_etl.next_jobs`) (the four single-ETL tasks that share the `state_province` transform via `utils.column_helpers.state_province` are `openmeteo_flood_etl`, `usgs_nwis_etl`, `ibtracs_cyclone_etl` and `gdacs_event_etl` — see GEO_ETL's `utils.column_helpers`), with `table_name` set to the view script name — so the shipped registry has seventeen of them (`metrics_*_vw` and `phenomenons_*_vw`, all reading `geo.union_etl`). They are siblings of `DATA_QUALITY-union_etl`: each waits for the stack with the normal `all_success` rule, runs `run_etl.py VIEW <view_name>` in the `etl` pool and (re)creates its view on the freshly stacked table (see [GEO_ETL — View job](../../GEO_ETL/docs/etl_jobs/view.md)). Like the DATA_QUALITY jobs they are terminal steps of `jobs.json` (only the verdict gate waits on them); because they are siblings, a failed data-quality run does not skip the views and vice versa.
+Ten first-stage `VIEW` jobs hang off the union root (`SINGLE_ETL-union_etl.next_jobs`): `VIEW-metrics_observed_vw` and the nine `VIEW-phenomenons_*_vw` map views (the four single-ETL tasks that share the `state_province` transform via `utils.column_helpers.state_province` are `openmeteo_flood_etl`, `usgs_nwis_etl`, `ibtracs_cyclone_etl` and `gdacs_event_etl` — see GEO_ETL's `utils.column_helpers`), with `table_name` set to the view script name. They are siblings of `DATA_QUALITY-union_etl`: each waits for the stack with the normal `all_success` rule, runs `run_etl.py VIEW <view_name>` in the `etl` pool and (re)creates its view on the freshly stacked table (see [GEO_ETL — View job](../../GEO_ETL/docs/etl_jobs/view.md)).
+
+`VIEW-metrics_observed_vw` then releases `PREDICTION-prediction_etl` (`Union.prediction`, `run_etl.py PREDICTION prediction_etl`), which rebuilds `geo.prediction_etl` with PySpark MLlib estimates for missing metric dates (see [GEO_ETL — PREDICTION job](../../GEO_ETL/docs/etl_jobs/prediction.md)). The eight combined `VIEW-metrics_*_vw` jobs are chained under the prediction task, so they always rebuild over the refreshed predictions; they are the only views that read `geo.prediction_etl`. The phenomenon/map views stay independent of predictions and run in parallel with the prediction branch.
+
+The combined metric views and phenomenon views are terminal steps (only the verdict gate waits on them). A failed data-quality run does not skip the views, and a failed phenomenon view does not stop the metric branch. Because the prediction branch gates the combined views and the verdict, a failed observed view or prediction does fail the DAG run — the metric views would otherwise silently lose their predicted rows.
 
 ### Data quality step
 
@@ -269,12 +293,12 @@ The `Union` job is not a normal source. Its root (`Union.single_etl`) is the onl
 
 - Adding or removing a source chain needs no edit to `SINGLE_ETL-union_etl`; the fan-in follows the chains in `jobs.json`.
 - The union starts as soon as the last single-ETL reached a terminal state, whatever the chains' results — **but only if at least one of them succeeded**. When all nine failed, the scheduler marks it `upstream_failed` without running it (nothing fresh to stack); when all nine are skipped, it is skipped as well. The `DATA_QUALITY` and `DATA_SOURCE_FILE` jobs are terminal steps of `jobs.json` (only the verdict gate waits on them) and are deliberately not part of the fan-in.
-- Jobs referenced from the union root wait for it with the normal `all_success` rule (shipped: `DATA_QUALITY-union_etl` and the seventeen `VIEW-<view_name>` jobs).
+- Jobs referenced from the union root wait for it with the normal `all_success` rule (shipped: `DATA_QUALITY-union_etl`, `VIEW-metrics_observed_vw`, the nine `VIEW-phenomenons_*_vw` jobs, and the downstream `PREDICTION-prediction_etl` → eight `VIEW-metrics_*_vw` chain).
 - `jobs.json` must always contain the `Union` job — `build_task_specs()` raises `ValueError` at parse time otherwise, which surfaces as a DAG import error in the UI until it is back.
 
 ### Adding a step under the union
 
-The shipped registry already chains a `DATA_QUALITY` job and the seventeen `VIEW` jobs under the union root (`DATA_QUALITY-union_etl` and `VIEW-<view_name>`, all referenced from `SINGLE_ETL-union_etl.next_jobs` → the tasks `Union_etl.data_quality` and `View.<view_name>`). Further steps follow the same recipe: add the job object and reference it from the union job's `next_jobs` — the new task waits for its parent with `all_success` and runs in the `etl` pool, no change to `geo_pipeline.py`, `geo_dag.py` or `model.py` needed (a new job *type* additionally needs an `EJobType` member and its `config.json` blocks — see `VIEW`).
+The shipped registry already chains a `DATA_QUALITY` job, the observed/phenomenon views and the prediction/metric-view branch under the union root (`DATA_QUALITY-union_etl`, `VIEW-metrics_observed_vw`, `VIEW-phenomenons_*_vw` and the downstream `PREDICTION-prediction_etl` → `VIEW-metrics_*_vw` chain). Further steps follow the same recipe: add the job object and reference it from the union job's `next_jobs` — the new task waits for its parent with `all_success` and runs in the `etl` pool, no change to `geo_pipeline.py`, `geo_dag.py` or `model.py` needed (a new job *type* additionally needs an `EJobType` member and its `config.json` blocks — see `VIEW`).
 
 ### Validating a change
 
@@ -324,7 +348,7 @@ The runtime knobs live in the `dag` block of `config.json`, loaded via pydantic 
 | `retries` | `0` | No automatic retries (parity with Celery; failures show up red instead of silently re-running) |
 | `execution_timeout_minutes` | `30` | Per-task timeout (parity with the old `task_time_limit`) |
 | `union_source` | `Union` | `source_name` of the fan-in job in `jobs.json` — must match exactly one root job there |
-| `pools` | download/etl | Airflow pool per job type (`DOWNLOAD` → `download`, everything else — `VIEW` and the synthesized `VERDICT` task included — → `etl`) |
+| `pools` | download/etl | Airflow pool per job type (`DOWNLOAD` → `download`; `INGESTION`, `DATA_QUALITY`, `DATA_SOURCE_FILE`, `SINGLE_ETL`, `VIEW`, `PREDICTION` and the synthesized `VERDICT` task → `etl`) |
 | `pool_slots` | 3 / 2 | Slot count per pool — seeded by `airflow-init` on every `docker compose up` via `docker/geo_airflow_spark/seed_pools.py` (idempotent) |
 
 You can inspect the pools under **Admin → Pools** or via `docker compose run --rm airflow-cli pools list`. The DAG itself is created unpaused (`dags_are_paused_at_creation=false` in `docker-compose.yaml`; `airflow-dag-activate` also repairs an already-paused DAG).

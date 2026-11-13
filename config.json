@@ -5,7 +5,10 @@
     "timezone": "Europe/Warsaw",
     "catchup": false,
     "max_active_runs": 1,
-    "tags": ["geo", "e2e"],
+    "tags": [
+      "geo",
+      "e2e"
+    ],
     "retries": 0,
     "execution_timeout_minutes": 30,
     "union_source": "Union",
@@ -16,7 +19,8 @@
       "data_source_file": "etl",
       "single_etl": "etl",
       "view": "etl",
-      "verdict": "etl"
+      "verdict": "etl",
+      "prediction": "etl"
     },
     "pool_slots": {
       "download": 3,
@@ -50,6 +54,11 @@
       "conda_env": "geo_etl_311"
     },
     "view": {
+      "folder_name": "GEO_ETL",
+      "python_script": "run_etl.py",
+      "conda_env": "geo_etl_311"
+    },
+    "prediction": {
       "folder_name": "GEO_ETL",
       "python_script": "run_etl.py",
       "conda_env": "geo_etl_311"

@@ -8,7 +8,15 @@ from pathlib import Path
 import pytest
 
 from model import EJobType, Job, build_task_specs, load_jobs, resolve_schedule
-from test._helpers import CRON, ETL_CMD_PREFIX, UNION_ROOT_ID, VIEW_COUNT, load_shipped_jobs
+from test._helpers import (
+    CRON,
+    ETL_CMD_PREFIX,
+    OBSERVED_VIEW_TASK_ID,
+    PREDICTION_TASK_ID,
+    UNION_ROOT_ID,
+    VIEW_COUNT,
+    load_shipped_jobs,
+)
 
 
 @pytest.fixture()
@@ -258,12 +266,12 @@ def test_resolve_schedule_conflicting_crons_raises(jobs_path: Path) -> None:
 
 
 def test_jobs_json_shipped_registry_loads() -> None:
-    """The shipped jobs.json is a flat list of 73 uniquely named jobs."""
+    """The shipped jobs.json is a flat list of 75 uniquely named jobs."""
     # Arrange & Act
     jobs = load_jobs()
 
     # Assert
-    assert len(jobs) == 73
+    assert len(jobs) == 75
     names = [job.name for job in jobs]
     assert len(names) == len(set(names))
 
@@ -346,49 +354,56 @@ def _shipped_union_jobs() -> list[dict]:
 
 
 def test_jobs_json_union_job_stacks_every_source_table() -> None:
-    """The Union chain is a SINGLE_ETL job on union_etl chaining a DATA_QUALITY job and the
-    VIEW jobs — the DAG turns its root into the fan-in task that waits for every source's
-    single_etl task, and each view reads the freshly stacked geo.union_etl."""
-    # Arrange & Act
-    union_jobs = _shipped_union_jobs()
-    single_etl, data_quality, *views = union_jobs
+    """The union root fans out to the observed-metrics view and the phenomenon views; the
+    observed view feeds PREDICTION, which in turn feeds the eight combined metrics views."""
+    # Arrange
+    jobs = {raw["name"]: raw for raw in load_shipped_jobs()}
+    union = jobs["SINGLE_ETL-union_etl"]
+    observed = jobs["VIEW-metrics_observed_vw"]
+    prediction = jobs["PREDICTION-prediction_etl"]
+    metrics_views = [
+        raw["name"]
+        for raw in jobs.values()
+        if raw["job_type"] == "VIEW"
+        and raw["table_name"].startswith("metrics_")
+        and raw["table_name"] != "metrics_observed_vw"
+    ]
 
     # Assert
-    assert single_etl == {
+    assert union == {
         "name": "SINGLE_ETL-union_etl",
         "task_id": UNION_ROOT_ID,
         "source_name": "Union",
         "job_type": "SINGLE_ETL",
         "table_name": "union_etl",
         "is_next_skipped_if_error": True,
-        "next_jobs": ["DATA_QUALITY-union_etl", *(f"VIEW-{view['table_name']}" for view in views)],
+        "next_jobs": [
+            "DATA_QUALITY-union_etl",
+            "VIEW-metrics_observed_vw",
+            *[
+                raw["name"]
+                for raw in jobs.values()
+                if raw["job_type"] == "VIEW" and raw["table_name"].startswith("phenomenons_")
+            ],
+        ],
     }
-    assert data_quality == {
-        "name": "DATA_QUALITY-union_etl",
-        "task_id": "Union_etl.data_quality",
+    assert observed["task_id"] == OBSERVED_VIEW_TASK_ID
+    assert observed["next_jobs"] == ["PREDICTION-prediction_etl"]
+    assert prediction == {
+        "name": "PREDICTION-prediction_etl",
+        "task_id": PREDICTION_TASK_ID,
         "source_name": "Union",
-        "job_type": "DATA_QUALITY",
-        "table_name": "union_etl",
+        "job_type": "PREDICTION",
+        "table_name": "prediction_etl",
         "is_next_skipped_if_error": True,
-        "next_jobs": [],
+        "next_jobs": metrics_views,
     }
-    assert len(views) == VIEW_COUNT
-    for view in views:
-        assert view == {
-            "name": f"VIEW-{view['table_name']}",
-            "task_id": f"View.{view['table_name']}",
-            "source_name": "Union",
-            "job_type": "VIEW",
-            "table_name": view["table_name"],
-            "is_next_skipped_if_error": True,
-            "next_jobs": [],
-        }
-        assert "schedule" not in view, view["name"]
+    assert len(metrics_views) == 8
 
 
-def test_shipped_view_jobs_wait_for_the_union_single_etl() -> None:
-    """Every VIEW job of the shipped registry waits for the SINGLE_ETL of union_etl — all
-    seventeen views read geo.union_etl, so they start right after it was stacked."""
+def test_shipped_view_jobs_wait_for_the_observed_or_prediction_step() -> None:
+    """Observed/phenomenon views wait for the union ETL; combined metrics views wait for
+    PREDICTION, which waits for the observed-metrics view."""
     # Arrange
     specs = {spec.task_id: spec for spec in build_task_specs()}
     views = [job for job in load_jobs() if job.job_type == EJobType.VIEW]
@@ -397,9 +412,15 @@ def test_shipped_view_jobs_wait_for_the_union_single_etl() -> None:
     assert len(views) == VIEW_COUNT
     for view in views:
         spec = specs[view.task_id]
-        assert spec.upstream == (UNION_ROOT_ID,)
-        assert spec.trigger_rule == "all_success"
         assert spec.command == f"{ETL_CMD_PREFIX} VIEW {view.table_name}"
+        if view.table_name.startswith("metrics_") and view.table_name != "metrics_observed_vw":
+            assert spec.upstream == (PREDICTION_TASK_ID,)
+        elif view.table_name == "metrics_observed_vw":
+            assert spec.upstream == (UNION_ROOT_ID,)
+        else:
+            assert spec.upstream == (UNION_ROOT_ID,)
+        assert spec.trigger_rule == "all_success"
+    assert specs[PREDICTION_TASK_ID].upstream == (OBSERVED_VIEW_TASK_ID,)
 
 
 @pytest.mark.parametrize(

@@ -103,6 +103,8 @@ x-airflow-common: &airflow-common
     # A bind mount (not a named volume) keeps the local GEO_Download/data folder in sync
     # with what the containers read and write.
     - "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data"
+    # Persisted PySpark MLlib models and metadata; visible in the host checkout.
+    - "../GEO_ETL/ml_models:/opt/geo/GEO_ETL/ml_models"
   # Refresh this container's in-image .env files from Compose, then run Airflow.
   entrypoint: ["/opt/geo/bin/airflow-entrypoint.sh"]
   user: "${AIRFLOW_UID:-50000}:0"
@@ -297,6 +299,7 @@ services:
       - "${SPARK_WORKER_1_UI_HOST_PORT:-8084}:8081"
     volumes:
       - "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data:ro"
+      - "../GEO_ETL/ml_models:/opt/geo/GEO_ETL/ml_models"
     networks:
       - geo_network
     healthcheck:
@@ -325,6 +328,7 @@ services:
       - "${SPARK_WORKER_2_UI_HOST_PORT:-8085}:8081"
     volumes:
       - "${GEO_DATA_DIR:?Set GEO_DATA_DIR in .env}:/opt/geo/GEO_Download/data:ro"
+      - "../GEO_ETL/ml_models:/opt/geo/GEO_ETL/ml_models"
     networks:
       - geo_network
     healthcheck:

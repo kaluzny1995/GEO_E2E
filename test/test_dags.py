@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 
 from model import EJobType, TaskSpec, build_task_specs
-from test._helpers import ETL_CMD_PREFIX, SOURCE_COUNT, UNION_ROOT_ID, load_shipped_jobs
+from test._helpers import (
+    ETL_CMD_PREFIX,
+    OBSERVED_VIEW_TASK_ID,
+    PREDICTION_TASK_ID,
+    SOURCE_COUNT,
+    UNION_ROOT_ID,
+    load_shipped_jobs,
+)
 
 
 def _write_jobs(tmp_path: Path, jobs: list[dict]) -> Path:
@@ -90,6 +97,7 @@ def test_union_waits_for_every_single_etl_and_needs_a_success(specs_map: dict[st
     assert len(union_root.upstream) == SOURCE_COUNT
     assert set(union_specs) == {
         UNION_ROOT_ID,
+        PREDICTION_TASK_ID,
         "Union_etl.data_quality",
         "Union.verdict",
         *_expected_view_task_ids(),
@@ -114,8 +122,8 @@ def test_only_the_union_root_and_the_verdict_use_the_special_trigger_rules(specs
 
 
 def test_union_children_keep_all_success(specs_map: dict[str, TaskSpec]) -> None:
-    """Every job chained under the union root — the DATA_QUALITY step and the seventeen VIEW
-    jobs — waits for it with the default all_success rule."""
+    """The union root feeds DATA_QUALITY, the observed view, PREDICTION and phenomenon views;
+    PREDICTION feeds the eight combined metrics views."""
     # Arrange & Act
     specs = specs_map
 
@@ -123,8 +131,15 @@ def test_union_children_keep_all_success(specs_map: dict[str, TaskSpec]) -> None
     child = specs["Union_etl.data_quality"]
     assert child.upstream == (UNION_ROOT_ID,)
     assert child.trigger_rule == "all_success"
-    for task_id in _expected_view_task_ids():
-        assert specs[task_id].upstream == (UNION_ROOT_ID,)
+    assert specs[OBSERVED_VIEW_TASK_ID].upstream == (UNION_ROOT_ID,)
+    assert specs[PREDICTION_TASK_ID].upstream == (OBSERVED_VIEW_TASK_ID,)
+    for view in load_shipped_jobs():
+        if view["job_type"] != "VIEW":
+            continue
+        task_id = view["task_id"]
+        is_combined_metrics = view["table_name"].startswith("metrics_") and view["table_name"] != "metrics_observed_vw"
+        expected = (PREDICTION_TASK_ID,) if is_combined_metrics else (UNION_ROOT_ID,)
+        assert specs[task_id].upstream == expected
         assert specs[task_id].trigger_rule == "all_success"
 
 
@@ -141,6 +156,7 @@ def test_commands_are_built_from_config(specs_map: dict[str, TaskSpec]) -> None:
         "cd ..;cd GEO_ETL;conda run --no-capture-output -n geo_etl_311 python run_etl.py DATA_SOURCE_FILE NIFC"
     )
     assert specs[UNION_ROOT_ID].command == f"{ETL_CMD_PREFIX} SINGLE_ETL union_etl"
+    assert specs[PREDICTION_TASK_ID].command == f"{ETL_CMD_PREFIX} PREDICTION prediction_etl"
 
 
 def test_job_types_are_preserved_for_pooling(specs_map: dict[str, TaskSpec]) -> None:
@@ -155,6 +171,7 @@ def test_job_types_are_preserved_for_pooling(specs_map: dict[str, TaskSpec]) -> 
     assert specs["NIFC.data_source_file"].job_type == EJobType.DATA_SOURCE_FILE
     assert specs["NIFC.single_etl"].job_type == EJobType.SINGLE_ETL
     assert specs["View.metrics_flood_vw"].job_type == EJobType.VIEW
+    assert specs[PREDICTION_TASK_ID].job_type == EJobType.PREDICTION
     assert specs["Union.verdict"].job_type == EJobType.VERDICT
 
 
@@ -204,9 +221,11 @@ def test_verdict_command_reads_the_union_root_state(specs_map: dict[str, TaskSpe
     verdict = specs_map["Union.verdict"]
 
     # Assert
-    assert verdict.command.startswith(f"{{% set task = '{UNION_ROOT_ID}' %}}")
-    assert "ti.get_task_states(ti.dag_id, task_ids=[task], run_ids=[run_id])" in verdict.command
-    assert "{% if state == 'success' %}" in verdict.command
+    assert verdict.command.startswith(f"{{% set task_0 = '{UNION_ROOT_ID}' %}}")
+    assert f"{{% set task_1 = '{PREDICTION_TASK_ID}' %}}" in verdict.command
+    assert "ti.get_task_states(ti.dag_id, task_ids=[task_0], run_ids=[run_id])" in verdict.command
+    assert "ti.get_task_states(ti.dag_id, task_ids=[task_1], run_ids=[run_id])" in verdict.command
+    assert "{% if state_0 == 'success' and state_1 == 'success' %}" in verdict.command
     assert verdict.command.count("exit 1") == 1
 
 

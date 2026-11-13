@@ -69,11 +69,10 @@ def test_job_config_creation() -> None:
         download=JobTypeConfig(folder_name="GEO_Download", python_script="run_download.py"),
         ingestion=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         data_quality=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
-        data_source_file=JobTypeConfig(
-            folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"
-        ),
+        data_source_file=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         single_etl=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
         view=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
+        prediction=JobTypeConfig(folder_name="GEO_ETL", python_script="run_etl.py", conda_env="geo_etl_311"),
     )
 
     # Assert
@@ -91,6 +90,9 @@ def test_job_config_creation() -> None:
     assert config.view.folder_name == "GEO_ETL"
     assert config.view.python_script == "run_etl.py"
     assert config.view.conda_env == "geo_etl_311"
+    assert config.prediction.folder_name == "GEO_ETL"
+    assert config.prediction.python_script == "run_etl.py"
+    assert config.prediction.conda_env == "geo_etl_311"
 
 
 def test_get_job_config(tmp_path: Path) -> None:
@@ -131,6 +133,11 @@ def test_get_job_config(tmp_path: Path) -> None:
                         "python_script": "test_etl_script.py",
                         "conda_env": "test_view_env",
                     },
+                    "prediction": {
+                        "folder_name": "TestEtlFolder",
+                        "python_script": "test_etl_script.py",
+                        "conda_env": "test_prediction_env",
+                    },
                 }
             }
         )
@@ -156,6 +163,9 @@ def test_get_job_config(tmp_path: Path) -> None:
     assert result.view.folder_name == "TestEtlFolder"
     assert result.view.python_script == "test_etl_script.py"
     assert result.view.conda_env == "test_view_env"
+    assert result.prediction.folder_name == "TestEtlFolder"
+    assert result.prediction.python_script == "test_etl_script.py"
+    assert result.prediction.conda_env == "test_prediction_env"
 
 
 def _dag_block() -> dict:
@@ -170,6 +180,7 @@ def _dag_block() -> dict:
             "data_source_file": "etl",
             "single_etl": "etl",
             "view": "etl",
+            "prediction": "etl",
             "verdict": "etl",
         },
         "pool_slots": {"download": 3, "etl": 2},
