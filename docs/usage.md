@@ -4,7 +4,7 @@
 
 ## Start the stack
 
-> **Prerequisites:** all six GEO repositories (`GEO_API`, `GEO_APP`, `GEO_Download`, `GEO_E2E`, `GEO_ETL`, `GEO_Visual`) must be checked out in the same folder, and `.env` must exist in the project root with the five `SUPABASE_DB_*` values. Airflow defaults to `airflow_admin` / `airflow_admin`; override `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` only if needed. Create `.env` with `cp .env.example .env` (or `./setup.sh`) — see [README — Dockerizing the solution](../README.md#1-configure-the-checkout-and-credentials--mandatory-before-docker-compose-up).
+> **Prerequisites:** all six GEO repositories (`GEO_API`, `GEO_APP`, `GEO_Download`, `GEO_E2E`, `GEO_ETL`, `GEO_Visual`) must be checked out in the same folder, and `.env` must exist in the project root with the five `SUPABASE_DB_*` values. Airflow defaults to `airflow_admin` / `airflow_admin`; override `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` only if needed. Create `.env` with `cp .env.example .env` (or `./setup.sh`) — see [Docker setup — Configure credentials](docker-setup.md#1-configure-the-checkout-and-credentials--mandatory-before-docker-compose-up).
 
 Everything runs inside Docker Compose — no local worker/beat processes:
 
@@ -25,9 +25,9 @@ docker compose ps
 docker stats --no-stream     # every container stays inside its memory limit
 ```
 
-> On a laptop build the images serially with `./build-images.sh` instead of `docker compose build`; the Anaconda-based images can otherwise run multiple dependency solvers at once. See [README — Memory and resource limits](../README.md#3-memory-and-resource-limits).
+> On a laptop build the images serially with `./build-images.sh` instead of `docker compose build`; the Anaconda-based images can otherwise run multiple dependency solvers at once. See [Docker setup — Memory and resource limits](docker-setup.md#3-memory-and-resource-limits).
 
-> The images are self-contained. Airflow task subprocesses use the image's `/opt/conda` environments and reach Spark at `spark://geo-spark-master:7078` over the Compose bridge network. The Spark UI is published at 8083; the Airflow UI at 8090. The host `GEO_Download/data` folder is bind-mounted at `/opt/geo/GEO_Download/data`, so downloaded CSVs are immediately visible in the local repo. See [README — Dockerizing the solution](../README.md#2-build-and-start-the-stack).
+> The images are self-contained. Airflow task subprocesses use the image's `/opt/conda` environments and reach Spark at `spark://geo-spark-master:7078` over the Compose bridge network. The Spark UI is published at 8083; the Airflow UI at 8090. The host `GEO_Download/data` folder is bind-mounted at `/opt/geo/GEO_Download/data`, so downloaded CSVs are immediately visible in the local repo. See [Docker setup — Build and start](docker-setup.md#2-build-and-start-the-stack).
 
 ### Rebuild after a repository change
 
@@ -36,7 +36,7 @@ docker compose build                 # rebuild changed images
 ./up.sh -d                           # preflight + recreate containers
 ```
 
-Use `./build-images.sh` when RAM is tight (serial builds; it runs the preflight first). `docker compose restart` does not rebuild an image. See [README — Rebuilding](../README.md#5-rebuilding-after-repository-changes).
+Use `./build-images.sh` when RAM is tight (serial builds; it runs the preflight first). `docker compose restart` does not rebuild an image. See [Docker setup — Rebuilding](docker-setup.md#5-rebuilding-after-repository-changes).
 
 > **Troubleshooting — services crash-looping with `ModuleNotFoundError: No module named 'airflow'`:** this comes from the entrypoint's `airflow db check` when `docker-compose.yaml` sets `HOME: /opt/airflow`. The `airflow` console script resolves its packages through the *HOME* user-site, while the image installs Airflow in `/home/airflow/.local`; the entrypoint only self-corrects `HOME` on a container's **first** start (when its uid is still missing from `/etc/passwd`), so every *restarted* service dies. Do not add a `HOME` override to the compose services — `AIRFLOW_HOME: /opt/airflow` alone keeps data/logs on the volume (see the comment in `docker-compose.yaml`).
 
