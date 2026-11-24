@@ -135,7 +135,10 @@ Output:
 ...
 Command exited with return code 0
 NIFC.ingestion Memory: 21.57 out of 62.50 GiB (34.50 %) used
+NIFC.ingestion Memory breakdown: 201.4 MiB RSS, 612.8 MiB children; cgroup 702.1/4096.0 MiB (peak 2048.0 MiB); host available 40.5 GiB, cache 30.0 GiB
 ```
+
+The second line attributes the host total: process RSS is the Airflow callback process, children are the LocalExecutor workers/task subprocess, the cgroup figures are the whole scheduler container, and the last pair explains how much host memory is available or held as page cache. A host number that rises while the process/cgroup figures are flat belongs to an unrelated process outside the stack (see [Memory leaks investigation 2026-11-23](memory-leaks-investigation-2026-11-23.md) and [2026-11-24](memory-leaks-investigation-2026-11-24.md)).
 
 For ETL steps, the JVM's `[spark]` stderr lines and the stage-memory lines are appended to stdout after the job finishes (they only exist once the log merge runs), so they appear at the end of the task log; the `GEO_ETL` `.log` file keeps the fully merged chronological view.
 

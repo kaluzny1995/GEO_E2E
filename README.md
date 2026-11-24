@@ -35,7 +35,7 @@ The images are self-contained: no host conda or host source bind mounts. Two hos
 - **Pools** — at most 3 concurrent downloads and 2 concurrent ETL/Spark jobs.
 - **Timeouts, no retries** — every task is killed after 30 minutes (old `task_time_limit`) and never retried.
 - **Subprocess execution** — each step runs as an isolated `conda run` subprocess, captured in the Airflow task log.
-- **Memory monitoring** — logs system memory usage (`xxx out of yyy GiB (zzz %) used`) at task success and failure.
+- **Memory monitoring** — logs host memory usage (`xxx out of yyy GiB (zzz %) used`) plus a process/child/cgroup/cache breakdown at task success and failure, so a leak is attributable to a task, the container, ordinary page cache or an unrelated host process.
 - **Frozen Pydantic models** — all configuration objects are immutable.
 
 ## Workflow
@@ -97,6 +97,8 @@ flowchart TD
 | [Architecture](docs/architecture.md) | Project layout, DAG generation and failure handling. |
 | [Configuration](docs/configuration.md) | `config.json` and `jobs.json` reference — command templates, chains, DAG settings, source → table mapping, and how to construct the DAG (placing jobs, dependencies, union fan-in); plus the Supabase metadata DB and a step-by-step `.env` walkthrough. |
 | [Usage](docs/usage.md) | Starting the Airflow stack, the web UI, manual triggers, log locations and example output. |
+| [Memory leaks investigation 2026-11-23](docs/memory-leaks-investigation-2026-11-23.md) | Seven-day host-memory evidence, desktop-vs-container attribution and the new process/cgroup breakdown. |
+| [Memory leaks investigation 2026-11-24](docs/memory-leaks-investigation-2026-11-24.md) | Follow-up after the daily run: desktop growth, flat pipeline containers and the host available/cache diagnostic. |
 | [Development](docs/development.md) | Running the tests, Ruff lint/format, mypy and tox environments. |
 
 ## Prerequisites

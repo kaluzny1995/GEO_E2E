@@ -23,7 +23,7 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.task.trigger_rule import TriggerRule
 
 from model import DagSettings, EJobType, TaskSpec, build_task_specs, get_dag_settings, resolve_schedule
-from util import log_memory_usage
+from util import log_memory_breakdown, log_memory_usage
 
 # Trigger-rule names of a TaskSpec -> Airflow enum, so model.py needs no Airflow imports
 _TRIGGER_RULES = {
@@ -75,9 +75,15 @@ commands come from the `job` block of `config.json` and run in the conda environ
 
 
 def _log_memory(context) -> None:
-    """Log system memory usage into the Airflow task log (on success and failure alike)."""
+    """Log system and process/container memory usage into the Airflow task log.
+
+    The host total alone cannot tell a task leak from an unrelated desktop
+    process; the breakdown line attributes the host number to this process, its
+    task children and the container cgroup.
+    """
     task_instance = context["ti"]
     log_memory_usage(_TASK_LOGGER, task_instance.task_id)
+    log_memory_breakdown(_TASK_LOGGER, task_instance.task_id)
 
 
 class JobsSubDAG:
